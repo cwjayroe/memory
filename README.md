@@ -1,40 +1,53 @@
-# Project Memory (Cursor + MCP)
+# Project Memory
 
-This folder provides a local, multi-project memory system for Cursor/Codex using MCP.
+This repo provides a local, multi-project memory system for Codex/Cursor workflows. It combines an MCP server for retrieval and CRUD operations with a small ingestion CLI for repo maintenance and manifest management.
 
-## What this supports
-- many projects over time (`project_id` namespaces)
-- many repos per project
-- startup context preload using a reusable 3-layer pattern
-- manual ingestion and policy-driven pruning
+## What it supports
+- project-scoped memories keyed by `project_id`
+- many repos per project through a manifest (`projects.yaml`)
+- query-centered memory retrieval with optional exact-body follow-up
+- repo/file ingestion, pruning, manifest bootstrap, and retention-policy runs
 
-## Files
-- `mcp_server.py`: MCP server (`search_context`, `store_memory`, `list_memories`, `get_memory`, `delete_memory`)
-- `ingest.py`: ingestion and maintenance CLI
-- `contracts.py`: typed request/argument models for MCP tools and ingest commands
-- `shared.py`: shared helpers and mem0 config wiring
-- `manifest.py`: manifest v2 model, migration, context-plan, and inference utilities
-- `projects.yaml`: manifest v2 (projects, repos, defaults, context packs)
-- `cursor-templates/`: reusable `.cursorrules` templates
-- `skills/project-memory/SKILL.md`: Codex skill for active-project resolution and preload
+## Repo layout
+- `mcp_server.py`: MCP server exposing retrieval, CRUD, and maintenance tools
+- `ingest.py`: CLI for ingest, note capture, pruning, manifest updates, and policy runs
+- `memory_types.py`: typed request and namespace parsing models
+- `helpers.py`: normalization, mem0 config wiring, inference helpers, and payload conversion
+- `memory_manager.py`: memory lifecycle, search orchestration, caching, and CRUD behavior
+- `manifest.py`: manifest v2 migration, repo resolution, and context-plan helpers
+- `chunking.py`: text and PDF chunking logic
+- `formatting.py`: text/json response formatting
+- `scoring.py`: ranking, reranking, dedupe, and candidate packing
+- `server_config.py`: environment-driven MCP configuration
+- `projects.yaml`: manifest v2 source of truth
+- `skills/project-memory/SKILL.md`: Codex skill for preload and capture workflows
 
-## Prerequisites
-- `ollama serve`
-- Python env: `/Users/willjayroe/Desktop/repos/ai-tooling/.env`
-
-## Tests and Coverage Gate
-Run tests from the `memory/` directory:
+## Install
+Create or activate a Python environment, then install dependencies from repo root:
 
 ```bash
-pytest -q tests
+python -m pip install -r requirements.txt
 ```
 
-Generate module coverage for the two confidence-critical files:
+Important runtime dependencies:
+- `ollama`: used for the mem0 LLM config
+- `chromadb`: vector store backing mem0
+- `pypdf`: required for PDF ingestion
+- transformer/reranker packages: used by the search reranker pipeline
+
+## Run tests
+Run the suite from repo root:
+
+```bash
+python -m pytest -q
+```
+
+Optional coverage run:
 
 ```bash
 mkdir -p .artifacts/coverage
 COVERAGE_FILE=.artifacts/coverage/.coverage \
-pytest -q tests \
+python -m pytest -q tests \
   --cov=. \
   --cov-report=term-missing \
   --cov-report=json:.artifacts/coverage/coverage.json \
@@ -42,345 +55,257 @@ pytest -q tests \
   --cov-report=html:.artifacts/coverage/html
 ```
 
-Enforce per-module minimums from `.artifacts/coverage/coverage.json`:
-
-```bash
-python - <<'PY'
-import json
-import pathlib
-import sys
-
-thresholds = {
-    "mcp_server.py": 80.0,
-    "ingest.py": 50.0,
-}
-
-report = json.loads(pathlib.Path(".artifacts/coverage/coverage.json").read_text())
-files = report.get("files", {})
-failures = []
-
-for module_name, minimum in thresholds.items():
-    entry = next((meta for path, meta in files.items() if path.endswith(module_name)), None)
-    if entry is None:
-        failures.append(f"{module_name}: missing from coverage report")
-        continue
-    actual = float(entry["summary"]["percent_covered"])
-    print(f"{module_name}: {actual:.2f}% (required {minimum:.2f}%)")
-    if actual < minimum:
-        failures.append(f"{module_name}: {actual:.2f}% < {minimum:.2f}%")
-
-if failures:
-    print("\\nCoverage gate failed:")
-    for failure in failures:
-        print(f"- {failure}")
-    sys.exit(1)
-
-print("\\nCoverage gate passed.")
-PY
-```
-
-## Manifest v2 model
+## Manifest model
 `projects.yaml` is the source of truth.
 
 Top-level sections:
 - `defaults`: ranking and preload defaults
 - `projects`: project metadata and associated repos
-- `repos`: repo root + include/exclude + `default_active_project`
-- `context_packs`: reusable startup preload definitions (default: `default_3_layer`)
+- `repos`: repo roots, include/exclude globs, default tags, and `default_active_project`
+- `context_packs`: reusable preload definitions such as `default_3_layer`
 
-## Active project resolution
-1. explicit override (skill: `memory use <project_id>`)
-2. repo `default_active_project` from manifest
+Active-project resolution generally follows:
+1. explicit override
+2. repo `default_active_project`
 3. `PROJECT_ID` env fallback
 
-## `search_context` API notes
+## MCP server
+The MCP server lives in `mcp_server.py` and registers as `memory`.
+
+Run it directly from repo root:
+
+```bash
+python mcp_server.py
+```
+
+### MCP tools
+- `search_context`
+- `store_memory`
+- `list_memories`
+- `get_memory`
+- `delete_memory`
+- `ingest_repo`
+- `ingest_file`
+- `prune_memories`
+- `init_project`
+- `clear_memories`
+
+### `search_context`
 Required:
 - `query`
 
 Scope:
-- `project_id` (explicit single-project)
-- `project_ids` (explicit multi-project)
-- if omitted, MCP infers project scope from query text + manifest metadata
+- `project_id`: explicit single-project scope
+- `project_ids`: explicit multi-project scope
+- if omitted, scope is inferred from query text plus manifest metadata
 
 Filters:
-- `repo`, `path_prefix`, `tags`, `categories`
+- `repo`
+- `path_prefix`
+- `tags`
+- `categories`
 
 Ranking controls:
-- `ranking_mode` (`hybrid_weighted_rerank` or `hybrid_weighted`)
-- `token_budget` (`600`-`4000`, default `1800`)
+- `ranking_mode`: `hybrid_weighted_rerank` or `hybrid_weighted`
+- `token_budget`
 - `candidate_pool`
 - `rerank_top_n`
 - `limit`
 - `debug`
 
 Response controls:
-- `response_format` (`text` or `json`, default `text`)
-- `include_full_text` (`false` by default; only selected results include full bodies)
-- `excerpt_chars` (`120`-`4000`, default `420`)
+- `response_format`: `text` or `json`
+- `include_full_text`: include full selected bodies in json/text responses when supported
+- `excerpt_chars`: excerpt size clamp for text-oriented payloads
 
-`search_context` response header includes:
-- `scope_source=explicit|inferred|fallback-default|fallback-retry`
-- `resolved_projects=<csv>`
+Search behavior:
+- text responses are concise and query-centered, not raw prefix dumps
+- response headers include `scope_source` and `resolved_projects`
+- if inferred scope returns no results, the server retries once with `PROJECT_ID + org_practice_projects`
+- use `response_format="json"` when you need stable IDs, excerpts, or excerpt metadata
+- use `get_memory` after search when you need the full untruncated body for one result
 
-Default `text` mode is concise and excerpted. `search_context` excerpts are query-centered, so the returned body is anchored around the best local match instead of the start of the stored chunk. Use `response_format=json` when callers need stable fields such as `id`, `excerpt`, and `excerpt_info`.
+### `list_memories` and `get_memory`
+- `list_memories` supports `response_format`, `include_full_text`, and `excerpt_chars`
+- default list output is excerpted/snippet-oriented
+- `get_memory` is the exact-read endpoint for one `memory_id`
+- `get_memory` returns the full stored body in both text and json modes
 
-## `list_memories` and `get_memory` notes
-- `list_memories` now supports the same `response_format`, `include_full_text`, and `excerpt_chars` options.
-- Default `list_memories` output is prefix-based and clearly marked as a snippet, not the whole memory.
-- `get_memory` is the canonical exact-read endpoint for one memory by `memory_id`.
-- `get_memory` returns the full untruncated memory body in both `text` and `json` modes.
+### Maintenance tools
+The MCP server also exposes maintenance operations for repo workflows:
+- `ingest_repo`: ingest all files for a manifest-backed repo profile
+- `ingest_file`: ingest one file
+- `prune_memories`: remove duplicate fingerprints and/or stale missing-path items
+- `init_project`: create or update a manifest project entry
+- `clear_memories`: delete all memories for a project after explicit confirmation
 
-If inferred scope returns no results, MCP retries once with:
-- `PROJECT_ID + defaults.org_practice_projects`
+## Runtime configuration
+Environment variables currently used by the repo:
 
-## Runtime env vars (MCP)
-- `PROJECT_ID`: fallback project when explicit/inferred scope is unavailable
-- `PROJECT_MEMORY_MANIFEST_PATH`: optional path to manifest for inference (default `memory/projects.yaml`)
-- `PROJECT_MEMORY_INFERENCE_MAX_PROJECTS`: inferred project cap (default `2`)
-- `PROJECT_MEMORY_PROJECT_SEARCH_TIMEOUT_SECONDS`: per-project search timeout (default `8.0`)
-- `PROJECT_MEMORY_GLOBAL_SEARCH_TIMEOUT_SECONDS`: global search timeout (default `20.0`)
+Core/project defaults:
+- `PROJECT_ID`: fallback project when explicit or inferred scope is unavailable
+- `PROJECT_MEMORY_ROOT`: local storage root for per-project Chroma collections
+- `PROJECT_MEMORY_GET_ALL_LIMIT`: max item count used for broad list/get-all operations
 
-## New ingestion commands
+Manifest and inference:
+- `PROJECT_MEMORY_MANIFEST_PATH`: manifest path; defaults to repo-local `projects.yaml`
+- `PROJECT_MEMORY_MAX_PROJECTS`: maximum projects per search request
+- `PROJECT_MEMORY_INFERENCE_MAX_PROJECTS`: cap for inferred project candidates
+
+Ranking and reranking:
+- `PROJECT_MEMORY_RANKING_MODE`
+- `PROJECT_MEMORY_DEFAULT_TOKEN_BUDGET`
+- `PROJECT_MEMORY_MIN_TOKEN_BUDGET`
+- `PROJECT_MEMORY_MAX_TOKEN_BUDGET`
+- `PROJECT_MEMORY_DEFAULT_RERANK_TOP_N`
+- `PROJECT_MEMORY_MAX_CANDIDATE_POOL`
+- `PROJECT_MEMORY_RERANKER_MODEL`
+
+Timeouts and cache:
+- `PROJECT_MEMORY_PROJECT_SEARCH_TIMEOUT_SECONDS`
+- `PROJECT_MEMORY_GLOBAL_SEARCH_TIMEOUT_SECONDS`
+- `PROJECT_MEMORY_CACHE_TTL_SECONDS`
+- `PROJECT_MEMORY_CACHE_MAX_ENTRIES`
+
+mem0/Ollama wiring:
+- `OLLAMA_BASE_URL`
+- `OLLAMA_MODEL`
+
+## CLI workflows
+The documented CLI path is direct script invocation from repo root:
+
 ```bash
-# Create/update a project in manifest v2
-python -m memory.ingest project-init \
+python ingest.py --help
+```
+
+### Common commands
+Create or update a project in the manifest:
+
+```bash
+python ingest.py project-init \
   --project checkout-tax \
   --repos customcheckout,shopify-discount-import-dapr \
   --description "Checkout tax feature" \
   --tags tax,checkout \
   --set-repo-defaults
+```
 
-# Preview resolved startup payloads for a repo (3 layers)
-python -m memory.ingest context-plan \
+Preview the resolved 3-layer preload plan for a repo:
+
+```bash
+python ingest.py context-plan \
   --repo customcheckout
+```
 
-# Preview retention policy effects for a project
-python -m memory.ingest policy-run \
+Preview retention policy effects:
+
+```bash
+python ingest.py policy-run \
   --project checkout-tax \
   --mode dry-run
+```
 
-# Apply retention policy
-python -m memory.ingest policy-run \
+Apply the retention policy:
+
+```bash
+python ingest.py policy-run \
   --project checkout-tax \
   --mode apply
 ```
 
-## Existing ingestion commands (still supported)
-```bash
-python -m memory.ingest repo --project <project_id> --repo <repo_name> --mode mixed
-python -m memory.ingest file --project <project_id> --repo <repo_name> --path /abs/path/file.py
-python -m memory.ingest note --project <project_id> --repo <repo_name> --category decision --text "..."
-python -m memory.ingest list --project <project_id> --repo <repo_name> --limit 20
-python -m memory.ingest prune --project <project_id> --repo <repo_name>
-python -m memory.ingest clear --project <project_id>
-```
-
-## PDF ingestion behavior
-- PDFs are ingested page-by-page, but page text is now split on paragraph, bullet, and section-style boundaries before raw character chunking.
-- Each stored PDF chunk keeps page provenance and a stable chunk label such as `page-7::chunk-2`.
-- After shipping a chunking change, you must re-ingest affected PDFs for retrieval quality to improve. Existing stored page chunks are not rewritten automatically.
-
-## PRD ingestion profile (PDF + docs)
-`projects.yaml` includes a reusable `product-docs` repo profile rooted at `/Users/willjayroe/Downloads` with `pdf/md/rst/txt` globs and default tags (`product-docs`, `prd`).
-
-Use it for feature PRDs:
+Ingest an entire repo:
 
 ```bash
-python -m memory.ingest file \
+python ingest.py repo \
   --project automatic-discounts \
-  --repo product-docs \
-  --path "/Users/willjayroe/Downloads/Discounts Product Doc.pdf" \
-  --mode headings \
-  --tags prd,requirements,discounts
+  --repo customcheckout \
+  --mode mixed
 ```
 
-For bulk PRD ingestion from the profile root:
+Ingest a single file:
 
 ```bash
-python -m memory.ingest repo \
+python ingest.py file \
   --project automatic-discounts \
-  --repo product-docs \
-  --mode headings
+  --repo customcheckout \
+  --path ./some/file.py \
+  --mode mixed
 ```
 
-## Retention policy (`policy-run`)
-- Tier A: `decision`, `architecture` never auto-pruned
-- Tier B: `summary` capped per `(repo, topic_key)` with keep limit (default `5`)
-- Tier C: `code`, `documentation` prune duplicate fingerprints and stale entries (default `45` days)
+Store a note/decision:
 
-## Cursor templates
-Use `memory/cursor-templates/*.cursorrules` as placeholders for any project/repo.
-
-## Codex integration
-Codex does not read `.cursorrules`; use the skill in:
-- `memory/skills/project-memory/SKILL.md`
-
-The skill is MCP-only and intentionally does not call local scripts.
-Use `ingest.py` as an external/manual workflow for bulk and file ingestion.
-
-Add a short line in repo `AGENTS.md` to invoke the skill at conversation start.
-
-## External CLI Debug Harness
-Use one-off CLI harnesses to debug `mcp_server.py` under `debugpy` without changing MCP runtime config.
-
-1) Initialize + list tools:
 ```bash
-/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python - <<'PY'
-import asyncio, os
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
-
-async def main():
-    server = StdioServerParameters(
-        command="/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python",
-        args=[
-            "-Xfrozen_modules=off",
-            "-m", "debugpy",
-            "--listen", "5678",
-            "--wait-for-client",
-            "/Users/willjayroe/Desktop/repos/ai-tooling/.worktrees/cursor-memories/memory/mcp_server.py",
-        ],
-        env={**os.environ, "PROJECT_ID": "customcheckout-practices"},
-    )
-    async with stdio_client(server) as (r, w):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            tools = await s.list_tools()
-            print([t.name for t in tools.tools])
-
-asyncio.run(main())
-PY
+python ingest.py note \
+  --project automatic-discounts \
+  --repo customcheckout \
+  --category decision \
+  --source-kind summary \
+  --text "Discount eligibility must be evaluated before cadence adjustments."
 ```
 
-2) Search flow:
+List memories:
+
 ```bash
-/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python - <<'PY'
-import asyncio, os
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
-
-async def main():
-    server = StdioServerParameters(
-        command="/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python",
-        args=[
-            "-Xfrozen_modules=off",
-            "-m", "debugpy",
-            "--listen", "5678",
-            "--wait-for-client",
-            "/Users/willjayroe/Desktop/repos/ai-tooling/.worktrees/cursor-memories/memory/mcp_server.py",
-        ],
-        env={**os.environ, "PROJECT_ID": "customcheckout-practices"},
-    )
-    async with stdio_client(server) as (r, w):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            result = await s.call_tool("search_context", {
-                "query": "automatic discounts constraints in customcheckout",
-                "repo": "customcheckout",
-                "limit": 4,
-            })
-            print(result.content[0].text if result.content else "no content")
-
-asyncio.run(main())
-PY
+python ingest.py list \
+  --project automatic-discounts \
+  --repo customcheckout \
+  --limit 20
 ```
 
-Attach your IDE debugger to `127.0.0.1:5678` after starting either command.
+Prune duplicates and stale missing-path entries:
 
-3) Store/list/delete roundtrip:
 ```bash
-/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python - <<'PY'
-import asyncio, os
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
-
-async def main():
-    server = StdioServerParameters(
-        command="/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python",
-        args=[
-            "-Xfrozen_modules=off",
-            "-m", "debugpy",
-            "--listen", "5678",
-            "--wait-for-client",
-            "/Users/willjayroe/Desktop/repos/ai-tooling/.worktrees/cursor-memories/memory/mcp_server.py",
-        ],
-        env={**os.environ, "PROJECT_ID": "customcheckout-practices"},
-    )
-    async with stdio_client(server) as (r, w):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            store = await s.call_tool("store_memory", {
-                "project_id": "customcheckout-practices",
-                "content": "debug roundtrip memory",
-                "repo": "customcheckout",
-                "category": "summary",
-                "source_kind": "summary",
-                "upsert_key": "debug-roundtrip",
-            })
-            print("STORE:", store.content[0].text)
-            listed = await s.call_tool("list_memories", {
-                "project_id": "customcheckout-practices",
-                "repo": "customcheckout",
-                "limit": 5,
-            })
-            print("LIST:", listed.content[0].text.splitlines()[0])
-            deleted = await s.call_tool("delete_memory", {
-                "project_id": "customcheckout-practices",
-                "upsert_key": "debug-roundtrip",
-            })
-            print("DELETE:", deleted.content[0].text)
-
-asyncio.run(main())
-PY
+python ingest.py prune \
+  --project automatic-discounts \
+  --repo customcheckout \
+  --by both
 ```
 
-4) Exact body fetch after search:
+Clear all memories for a project:
+
 ```bash
-/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python - <<'PY'
-import asyncio, json, os
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
-
-async def main():
-    server = StdioServerParameters(
-        command="/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/python",
-        args=["/Users/willjayroe/Desktop/repos/ai-tooling/.worktrees/cursor-memories/memory/mcp_server.py"],
-        env={**os.environ, "PROJECT_ID": "customcheckout-practices"},
-    )
-    async with stdio_client(server) as (r, w):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            search = await s.call_tool("search_context", {
-                "query": "charge date updates cadence",
-                "project_id": "multiple-queued-charges",
-                "response_format": "json",
-                "limit": 3,
-            })
-            payload = json.loads(search.content[0].text)
-            first_id = payload["items"][0]["id"]
-            exact = await s.call_tool("get_memory", {
-                "project_id": "multiple-queued-charges",
-                "memory_id": first_id,
-                "response_format": "json",
-            })
-            print(exact.content[0].text)
-
-asyncio.run(main())
-PY
+python ingest.py clear \
+  --project automatic-discounts
 ```
+
+## PDF ingestion
+- PDFs require `pypdf`
+- PDF text is chunked with page provenance and structured boundaries before raw character chunking
+- stored PDF chunks keep labels such as `page-7::chunk-2`
+- re-ingest affected PDFs after chunking changes; existing stored chunks are not rewritten automatically
+
+## Retention policy
+`policy-run` currently applies three broad rules:
+- Tier A: `decision` and `architecture` are protected from auto-prune
+- Tier B: `summary` items are capped per `(repo, topic key)` by `summary_keep`
+- Tier C: `code` and `documentation` items can be pruned by duplicate fingerprint and age
+
+## Codex skill
+Use `skills/project-memory/SKILL.md` for conversation startup, context preload, and durable decision capture.
+
+The skill is MCP-only. Use the CLI or explicit maintenance MCP tools when you need repo ingestion or manifest maintenance.
+
+The AGENTS snippet lives in `skills/project-memory/references/agents-snippet.md`.
+
+## Debugging
+For quick local debugging, run the server directly:
+
+```bash
+python mcp_server.py
+```
+
+For debugger attach flows, use repo-local paths instead of machine-specific absolute paths. Example:
+
+```bash
+python -m debugpy --listen 5678 --wait-for-client ./mcp_server.py
+```
+
+Then attach your IDE debugger to `127.0.0.1:5678`.
+
+If you want to script MCP calls against the local server, point your client at repo-local entrypoints such as `./mcp_server.py` and set `PROJECT_ID` in the spawned environment.
 
 ## Troubleshooting
-- If a relevant rule exists in a stored memory but the old system only showed unrelated prefix text, the likely cause was coarse PDF page chunks combined with prefix truncation.
-- The current flow fixes that by returning query-centered excerpts from selected search results and exposing `get_memory` for exact full-body retrieval.
-- If the search result still looks too broad, re-ingest the source PDF so the newer boundary-aware chunker can replace the old page-sized chunks.
-
-## Entrypoints
-Both modes are supported:
-- package-style: `python -m memory.ingest`, `python -m memory.mcp_server`
-- direct scripts: `python memory/ingest.py`, `python memory/mcp_server.py`
-
-## Dependencies
-```bash
-/Users/willjayroe/Desktop/repos/ai-tooling/.env/bin/pip install -r \
-  /Users/willjayroe/Desktop/repos/ai-tooling/.worktrees/cursor-memories/memory/requirements.txt
-```
+- If a relevant stored rule does not appear in text mode, retry with `response_format="json"` and inspect result IDs plus excerpt metadata.
+- If you need the exact stored body for one result, call `get_memory` with the returned `memory_id`.
+- If a PDF-derived result looks too broad or too old, re-ingest the source PDF so the current chunker replaces older stored chunks.
+- If reranking is unavailable, inspect the configured reranker dependencies and `PROJECT_MEMORY_RERANKER_MODEL`.

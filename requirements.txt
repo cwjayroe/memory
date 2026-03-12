@@ -8,3 +8,7 @@ mcp
 mem0ai
 pyyaml
 pypdf
+chromadb
+ollama
+sentence-transformers 
+transformers

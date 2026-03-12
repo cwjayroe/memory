@@ -1,11 +1,11 @@
 ---
 name: project-memory
-description: Retrieve and persist multi-project engineering context using the local project-memory MCP. Use when starting a conversation, switching project focus, capturing decisions, or loading prior context across repos without manual recap.
+description: Resolve active project scope, preload multi-project engineering context, and persist durable implementation notes using the local memory MCP. Use when starting a conversation, switching project focus, capturing decisions, or retrieving prior context across repos without a manual recap.
 ---
 
 # Project Memory Skill
 
-Use MCP tools only. Do not assume local script paths are available in the skill runtime.
+Use MCP tools only. Do not assume local script paths or package-style entrypoints are available in the skill runtime.
 
 ## Required MCP Tools
 - `search_context`
@@ -16,13 +16,13 @@ Use MCP tools only. Do not assume local script paths are available in the skill 
 
 ## Interface Commands
 - `memory use <project_id>`
-  - Set conversation-scoped active project override.
+  - Set the conversation-scoped active project override.
 - `memory practices <project_ids_csv>`
-  - Set org/team best-practice project IDs for this conversation.
+  - Set org/team practice project IDs for this conversation.
 - `memory status`
-  - Show current repo, active project override, practice projects, and MCP fallback behavior.
+  - Show current repo, active project override, practice projects, and fallback behavior.
 - `memory preload [topic]`
-  - Load startup context using layered MCP retrieval.
+  - Load startup context with layered MCP retrieval.
 - `memory capture decision: <text>`
   - Persist a decision with structured metadata.
 - `memory capture summary: <text>`
@@ -34,48 +34,41 @@ Use MCP tools only. Do not assume local script paths are available in the skill 
 - `repo`: infer from current working repo when available.
 - `default_project`: MCP `PROJECT_ID` fallback when no explicit project scope is provided.
 
-## Workflow (MCP-Only)
+## Default Workflow
 1. Resolve scope
 - Build `project_ids` in this order:
   - if `active_project` exists: `[active_project] + practice_projects`
   - else if `practice_projects` exists: `practice_projects`
   - else: omit `project_id` and `project_ids` so MCP infers project scope from the prompt.
 - Dedupe while preserving order.
-- MCP fallback behavior when scope is omitted:
-  - infer from query + manifest metadata
-  - if no inferred hit, retry with `PROJECT_ID + org_practice_projects`
+- If scope is omitted, rely on MCP inference from query + manifest metadata.
+- If inference returns no hit, MCP retries with `PROJECT_ID + org_practice_projects`.
 
 2. Preload context
-- Layer 1 (practices/constraints):
-  - `search_context` with query:
-    - `engineering best practices, architecture constraints, coding standards`
+- Layer 1: practices and constraints
+  - `search_context(query="engineering best practices, architecture constraints, coding standards", categories=["decision","architecture","summary"], limit=4)`
   - Include `project_ids` when available.
-  - Use `categories=["decision","architecture","summary"]`, `limit=4`.
-- Layer 2 (active project global), only when `active_project` is set:
-  - Query:
-    - `{active_project} architecture, recent decisions, constraints`
+- Layer 2: active-project context, only when `active_project` is set
+  - `search_context(query="{active_project} architecture, recent decisions, constraints", categories=["decision","architecture","summary","documentation"], limit=4)`
   - Include `project_ids`.
-  - Use `categories=["decision","architecture","summary","documentation"]`, `limit=4`.
-- Layer 3 (repo focus), when repo is known:
-  - Query:
-    - `{active_project or "current project"} in repo {repo}, critical files and flow constraints`
-  - Include `project_ids` when available and `repo=<repo>`.
-  - Use `categories=["code","summary","decision","architecture","documentation"]`, `limit=4`.
+- Layer 3: repo-focused context, when `repo` is known
+  - `search_context(query="{active_project or 'current project'} in repo {repo}, critical files and flow constraints", categories=["code","summary","decision","architecture","documentation"], limit=4, repo=repo)`
+  - Include `project_ids` when available.
 
-3. Capture durable context
-- For decisions:
-  - Call `store_memory` with:
-    - `project_id`: `active_project` when set (otherwise omit for fallback)
-    - `repo`: current repo if known
-    - `category="decision"`
-    - `source_kind="summary"`
-    - `tags`: include stable tags (for example `decision,architecture`)
-- For implementation recaps:
-  - Call `store_memory` with `category="summary"` and project/repo metadata.
+3. Follow up precisely when needed
+- Use `response_format="json"` when you need exact `id`, `excerpt`, or metadata fields from `search_context` or `list_memories`.
+- Use `get_memory` after `search_context` or `list_memories` when you need the full untruncated body of a specific memory.
+- Use `list_memories` for targeted audits or exact selectors; do not default to it for startup preload.
 
-4. Refresh strategy
+4. Capture durable context
 - For quick updates in conversation, use `store_memory`.
-- For bulk or file-level ingestion, use external ingestion workflows outside this skill runtime.
+- For decisions, call `store_memory` with:
+  - `project_id`: `active_project` when set, otherwise omit for fallback
+  - `repo`: current repo if known
+  - `category="decision"`
+  - `source_kind="summary"`
+  - `tags`: stable tags such as `decision,architecture`
+- For implementation recaps, call `store_memory` with `category="summary"` and project/repo metadata.
 
 ## Guardrails
 - Do not hardcode feature names, absolute paths, or repo-specific assumptions.
@@ -83,8 +76,9 @@ Use MCP tools only. Do not assume local script paths are available in the skill 
 - Omit project scope only when you want inference based on prompt intent.
 - Keep startup retrieval tight (typically 6-10 total memories).
 - Always include project/repo metadata when storing memory if known.
-- Use `response_format="json"` when you need exact `id`, `excerpt`, or metadata fields.
-- Use `get_memory` after `search_context` or `list_memories` when you need the full untruncated body of a specific memory.
+- Treat the local memory MCP as the default interaction surface for preload and capture.
+- Do not use maintenance/admin MCP tools (`ingest_repo`, `ingest_file`, `prune_memories`, `init_project`, `clear_memories`) unless the user explicitly asks for repo maintenance or memory administration.
+- Use external ingestion workflows outside this skill runtime for bulk or file-level maintenance.
 
 ## Reference
-- AGENTS snippet: `references/agents-snippet.md`
+- `references/agents-snippet.md`: short AGENTS.md startup wording for invoking this skill.

@@ -48,7 +48,7 @@ from manifest import (
 
 LOGGER = logging.getLogger(__name__)
 config = ServerConfig.from_env()
-app = Server("project-memory")
+app = Server("memory")
 scoring_engine = ScoringEngine(
     reranker=RerankerManager(config.reranker_model_name),
 )
