@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manual ingestion CLI for project-scoped, repo-aware memory."""
+"""Manual ingestion CLI for scoped, repo-aware memory."""
 
 from __future__ import annotations
 
@@ -619,7 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(func=None)
     sub = parser.add_subparsers(dest="command")
 
-    repo_cmd = sub.add_parser("repo", help="Ingest an entire repo with include/exclude globs")
+    repo_cmd = sub.add_parser("repo", help="Ingest an entire repo into a selected scope")
     repo_cmd.add_argument("--project", required=True)
     repo_cmd.add_argument("--repo", required=True)
     repo_cmd.add_argument("--root")
@@ -630,7 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     repo_cmd.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     repo_cmd.set_defaults(func=cmd_repo)
 
-    file_cmd = sub.add_parser("file", help="Ingest a single file")
+    file_cmd = sub.add_parser("file", help="Ingest a single file into a selected scope")
     file_cmd.add_argument("--project", required=True)
     file_cmd.add_argument("--repo", required=True)
     file_cmd.add_argument("--path", required=True)
@@ -638,7 +638,7 @@ def build_parser() -> argparse.ArgumentParser:
     file_cmd.add_argument("--tags")
     file_cmd.set_defaults(func=cmd_file)
 
-    note_cmd = sub.add_parser("note", help="Store a decision/note memory")
+    note_cmd = sub.add_parser("note", help="Store a decision or note in a selected scope")
     note_cmd.add_argument("--project", required=True)
     note_cmd.add_argument("--text", required=True)
     note_cmd.add_argument("--repo")
@@ -648,7 +648,7 @@ def build_parser() -> argparse.ArgumentParser:
     note_cmd.add_argument("--tags")
     note_cmd.set_defaults(func=cmd_note)
 
-    list_cmd = sub.add_parser("list", help="List memories")
+    list_cmd = sub.add_parser("list", help="List memories for a selected scope")
     list_cmd.add_argument("--project", required=True)
     list_cmd.add_argument("--repo")
     list_cmd.add_argument("--category")
@@ -658,18 +658,18 @@ def build_parser() -> argparse.ArgumentParser:
     list_cmd.add_argument("--limit", type=int, default=20)
     list_cmd.set_defaults(func=cmd_list)
 
-    prune_cmd = sub.add_parser("prune", help="Prune duplicates/stale entries")
+    prune_cmd = sub.add_parser("prune", help="Prune duplicate or stale entries in a selected scope")
     prune_cmd.add_argument("--project", required=True)
     prune_cmd.add_argument("--repo")
     prune_cmd.add_argument("--path-prefix")
     prune_cmd.add_argument("--by", choices=["fingerprint", "path", "both"], default="both")
     prune_cmd.set_defaults(func=cmd_prune)
 
-    clear_cmd = sub.add_parser("clear", help="Delete all memories for a project")
+    clear_cmd = sub.add_parser("clear", help="Delete all memories for a selected scope")
     clear_cmd.add_argument("--project", required=True)
     clear_cmd.set_defaults(func=cmd_clear)
 
-    project_init_cmd = sub.add_parser("project-init", help="Create or update a project entry in manifest v2")
+    project_init_cmd = sub.add_parser("project-init", help="Create or update a scope entry in manifest v2")
     project_init_cmd.add_argument("--project", required=True)
     project_init_cmd.add_argument("--repos", required=True, help="Comma-separated repo names")
     project_init_cmd.add_argument("--description", default="")
@@ -678,14 +678,14 @@ def build_parser() -> argparse.ArgumentParser:
     project_init_cmd.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     project_init_cmd.set_defaults(func=cmd_project_init)
 
-    context_plan_cmd = sub.add_parser("context-plan", help="Print resolved 3-layer search_context payloads")
+    context_plan_cmd = sub.add_parser("context-plan", help="Print resolved 3-layer context payloads")
     context_plan_cmd.add_argument("--repo", required=True)
     context_plan_cmd.add_argument("--project")
     context_plan_cmd.add_argument("--pack", default="default_3_layer")
     context_plan_cmd.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     context_plan_cmd.set_defaults(func=cmd_context_plan)
 
-    policy_cmd = sub.add_parser("policy-run", help="Run tiered retention policy for a project")
+    policy_cmd = sub.add_parser("policy-run", help="Run tiered retention policy for a selected scope")
     policy_cmd.add_argument("--project", required=True)
     policy_cmd.add_argument("--mode", choices=["dry-run", "apply"], default="dry-run")
     policy_cmd.add_argument("--stale-days", type=int, default=45)

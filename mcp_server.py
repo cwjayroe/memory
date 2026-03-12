@@ -1,4 +1,4 @@
-"""Project-scoped, repo-aware memory server for Cursor via MCP."""
+"""Scoped, repo-aware memory server for MCP clients."""
 
 from __future__ import annotations
 
@@ -473,8 +473,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="search_context",
             description=(
-                "Search project memory for architectural context, decisions, and code-aware "
-                "summaries. Supports one or many projects plus repo/path/category/tag filtering."
+                "Search scoped memory for architectural context, decisions, and code-aware "
+                "summaries. Supports one or many scopes via project_id/project_ids plus "
+                "repo/path/category/tag filtering."
             ),
             inputSchema={
                 "type": "object",
@@ -527,8 +528,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="store_memory",
             description=(
-                "Store structured memory for a project. Supports metadata fields and optional "
-                "upsert behavior via upsert_key or fingerprint."
+                "Store structured memory in a scope. Uses project_id as the current scope "
+                "identifier and supports metadata fields plus optional upsert behavior via "
+                "upsert_key or fingerprint."
             ),
             inputSchema={
                 "type": "object",
@@ -549,7 +551,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_memories",
-            description="List stored memories with optional project/repo/category/tag/path filters and pagination.",
+            description=(
+                "List stored memories for a selected scope with optional project_id/repo/"
+                "category/tag/path filters and pagination."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -597,7 +602,7 @@ async def list_tools() -> list[Tool]:
             name="delete_memory",
             description=(
                 "Delete memory by memory_id, or delete all memories matching an upsert_key "
-                "within a project."
+                "within a selected scope."
             ),
             inputSchema={
                 "type": "object",
@@ -611,8 +616,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="ingest_repo",
             description=(
-                "Ingest all files in a repository into project memory. Chunks each file and "
-                "stores the results, replacing any existing chunks for each file."
+                "Ingest all files in a repository into scoped memory. The project field "
+                "selects the target scope. Existing chunks for each file are replaced."
             ),
             inputSchema={
                 "type": "object",
@@ -642,7 +647,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="ingest_file",
-            description="Ingest a single file into project memory, replacing any existing chunks for that file.",
+            description=(
+                "Ingest a single file into scoped memory, replacing any existing chunks for "
+                "that file. The project field selects the target scope."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -662,7 +670,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="prune_memories",
             description=(
-                "Remove duplicate or stale memories from a project. "
+                "Remove duplicate or stale memories from a selected scope. "
                 "Prune by duplicate fingerprint, by missing source paths, or both."
             ),
             inputSchema={
@@ -683,8 +691,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="init_project",
             description=(
-                "Initialize or update a project in the memory manifest. "
-                "Creates the project entry and default repo configurations."
+                "Initialize or update a scope entry in the memory manifest. "
+                "The interface keeps the current project field name and creates the "
+                "matching manifest entry plus default repo configurations."
             ),
             inputSchema={
                 "type": "object",
@@ -704,7 +713,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="clear_memories",
             description=(
-                "Delete ALL memories for a project. "
+                "Delete ALL memories for a selected scope. "
                 "Requires confirm=true to proceed — returns a warning prompt otherwise."
             ),
             inputSchema={

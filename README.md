@@ -1,12 +1,20 @@
 # Project Memory
 
-This repo provides a local, multi-project memory system for Codex/Cursor workflows. It combines an MCP server for retrieval and CRUD operations with a small ingestion CLI for repo maintenance and manifest management.
+This repo provides a local scoped memory and context system for agent workflows in tools such as Codex, Cursor, and Claude. It combines an MCP server for retrieval and CRUD operations with a small ingestion CLI for repo maintenance and manifest management.
+
+The implementation currently uses `project_id` as the storage and retrieval namespace key. In practice, a `project_id` can represent a project, domain, workstream, standards pack, migration, incident, customer issue, or any other durable context scope.
 
 ## What it supports
-- project-scoped memories keyed by `project_id`
-- many repos per project through a manifest (`projects.yaml`)
-- query-centered memory retrieval with optional exact-body follow-up
+- scoped memories keyed by `project_id`
+- many repos per scope through a manifest (`projects.yaml`)
+- layered context preload and query-centered retrieval with optional exact-body follow-up
 - repo/file ingestion, pruning, manifest bootstrap, and retention-policy runs
+
+## Example scope shapes
+- `engineering-standards`: shared coding and architecture guidance
+- `billing-domain`: cross-repo context for a subsystem or business area
+- `migration-2026`: initiative or workstream context spanning many repos
+- `customer-escalation-acme`: incident or customer-specific context bundle
 
 ## Repo layout
 - `mcp_server.py`: MCP server exposing retrieval, CRUD, and maintenance tools
@@ -58,13 +66,15 @@ python -m pytest -q tests \
 ## Manifest model
 `projects.yaml` is the source of truth.
 
+The current schema uses `projects`, `project_id`, and `default_active_project` as field names for compatibility. Those entries can still represent any context scope, not only software projects.
+
 Top-level sections:
 - `defaults`: ranking and preload defaults
-- `projects`: project metadata and associated repos
+- `projects`: scope metadata and associated repos, keyed by `project_id`
 - `repos`: repo roots, include/exclude globs, default tags, and `default_active_project`
 - `context_packs`: reusable preload definitions such as `default_3_layer`
 
-Active-project resolution generally follows:
+Active-scope resolution generally follows:
 1. explicit override
 2. repo `default_active_project`
 3. `PROJECT_ID` env fallback
@@ -95,8 +105,8 @@ Required:
 - `query`
 
 Scope:
-- `project_id`: explicit single-project scope
-- `project_ids`: explicit multi-project scope
+- `project_id`: explicit single-scope selector; this is the current interface name
+- `project_ids`: explicit multi-scope selector; this is the current interface name
 - if omitted, scope is inferred from query text plus manifest metadata
 
 Filters:
@@ -135,16 +145,16 @@ Search behavior:
 The MCP server also exposes maintenance operations for repo workflows:
 - `ingest_repo`: ingest all files for a manifest-backed repo profile
 - `ingest_file`: ingest one file
-- `prune_memories`: remove duplicate fingerprints and/or stale missing-path items
-- `init_project`: create or update a manifest project entry
-- `clear_memories`: delete all memories for a project after explicit confirmation
+- `prune_memories`: remove duplicate fingerprints and/or stale missing-path items in a selected scope
+- `init_project`: create or update a manifest scope entry using the current `project` field name
+- `clear_memories`: delete all memories for a selected scope after explicit confirmation
 
 ## Runtime configuration
 Environment variables currently used by the repo:
 
 Core/project defaults:
-- `PROJECT_ID`: fallback project when explicit or inferred scope is unavailable
-- `PROJECT_MEMORY_ROOT`: local storage root for per-project Chroma collections
+- `PROJECT_ID`: fallback scope key when explicit or inferred scope is unavailable
+- `PROJECT_MEMORY_ROOT`: local storage root for per-scope Chroma collections
 - `PROJECT_MEMORY_GET_ALL_LIMIT`: max item count used for broad list/get-all operations
 
 Manifest and inference:
@@ -179,14 +189,16 @@ python ingest.py --help
 ```
 
 ### Common commands
-Create or update a project in the manifest:
+The examples below are illustrative. Replace scope IDs such as `engineering-standards`, `billing-domain`, `migration-2026`, and `customer-escalation-acme` with your own `project_id` values.
+
+Create or update a scope entry in the manifest (`--project` is the current CLI flag name):
 
 ```bash
 python ingest.py project-init \
-  --project checkout-tax \
-  --repos customcheckout,shopify-discount-import-dapr \
-  --description "Checkout tax feature" \
-  --tags tax,checkout \
+  --project engineering-standards \
+  --repos billing-api,worker-docs \
+  --description "Shared engineering and architecture guidance" \
+  --tags standards,architecture \
   --set-repo-defaults
 ```
 
@@ -194,14 +206,14 @@ Preview the resolved 3-layer preload plan for a repo:
 
 ```bash
 python ingest.py context-plan \
-  --repo customcheckout
+  --repo billing-api
 ```
 
 Preview retention policy effects:
 
 ```bash
 python ingest.py policy-run \
-  --project checkout-tax \
+  --project migration-2026 \
   --mode dry-run
 ```
 
@@ -209,46 +221,46 @@ Apply the retention policy:
 
 ```bash
 python ingest.py policy-run \
-  --project checkout-tax \
+  --project migration-2026 \
   --mode apply
 ```
 
-Ingest an entire repo:
+Ingest an entire repo into a scope:
 
 ```bash
 python ingest.py repo \
-  --project automatic-discounts \
-  --repo customcheckout \
+  --project billing-domain \
+  --repo billing-api \
   --mode mixed
 ```
 
-Ingest a single file:
+Ingest a single file into a scope:
 
 ```bash
 python ingest.py file \
-  --project automatic-discounts \
-  --repo customcheckout \
-  --path ./some/file.py \
+  --project migration-2026 \
+  --repo worker-docs \
+  --path ./docs/cutover-checklist.md \
   --mode mixed
 ```
 
-Store a note/decision:
+Store a decision or recap in a scope:
 
 ```bash
 python ingest.py note \
-  --project automatic-discounts \
-  --repo customcheckout \
+  --project customer-escalation-acme \
+  --repo support-playbooks \
   --category decision \
   --source-kind summary \
-  --text "Discount eligibility must be evaluated before cadence adjustments."
+  --text "Escalations touching invoice replay must validate ledger lag before manual re-run."
 ```
 
 List memories:
 
 ```bash
 python ingest.py list \
-  --project automatic-discounts \
-  --repo customcheckout \
+  --project engineering-standards \
+  --repo billing-api \
   --limit 20
 ```
 
@@ -256,16 +268,16 @@ Prune duplicates and stale missing-path entries:
 
 ```bash
 python ingest.py prune \
-  --project automatic-discounts \
-  --repo customcheckout \
+  --project billing-domain \
+  --repo billing-api \
   --by both
 ```
 
-Clear all memories for a project:
+Clear all memories for a scope:
 
 ```bash
 python ingest.py clear \
-  --project automatic-discounts
+  --project customer-escalation-acme
 ```
 
 ## PDF ingestion
@@ -273,6 +285,41 @@ python ingest.py clear \
 - PDF text is chunked with page provenance and structured boundaries before raw character chunking
 - stored PDF chunks keep labels such as `page-7::chunk-2`
 - re-ingest affected PDFs after chunking changes; existing stored chunks are not rewritten automatically
+
+### Ingest a single PDF
+If your manifest includes a repo profile for documents, ingest the PDF through that repo. This repo already includes a `product-docs` profile in `projects.yaml`; in your own setup, that profile can support any scope shape.
+
+```bash
+python ingest.py file \
+  --project customer-escalation-acme \
+  --repo product-docs \
+  --path "/Users/willjayroe/Downloads/ACME Escalation Timeline.pdf" \
+  --mode headings \
+  --tags incident,customer
+```
+
+Notes:
+- the CLI still accepts `--mode`, but `.pdf` files always use the PDF-specific chunker
+- repo `default_tags` are merged with the tags you pass; for `product-docs` that means `product-docs` and `prd` are added automatically
+- existing chunks for the same source path are deleted before the PDF is re-ingested
+
+### Ingest all PDFs from a manifest-backed docs repo
+If you want to ingest every matching file from the repo profile root:
+
+```bash
+python ingest.py repo \
+  --project migration-2026 \
+  --repo product-docs \
+  --mode headings
+```
+
+The `product-docs` profile currently includes `**/*.pdf`, `**/*.md`, `**/*.rst`, and `**/*.txt`, so this will ingest all matching documents under that configured root.
+
+### What gets stored
+- each PDF page is split into structured blocks before chunking
+- stored chunks use `source_kind="doc"` and `category="documentation"`
+- each chunk records page provenance in labels like `path/to/file.pdf::page-1::chunk-2`
+- if a PDF has no extractable text, ingestion stores a placeholder documentation chunk instead of silently skipping the file
 
 ## Retention policy
 `policy-run` currently applies three broad rules:
