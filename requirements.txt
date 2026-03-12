@@ -1,0 +1,6 @@
+sentence-transformers
+rank-bm25
+numpy
+torch
+pypdf
+pytest-cov

@@ -1,0 +1,114 @@
+version: 2
+defaults:
+  ranking_mode: hybrid_weighted_rerank
+  token_budget: 1800
+  limit: 6
+  org_practice_projects:
+  - customcheckout-practices
+projects:
+  customcheckout-practices:
+    description: Shared coding standards and architecture practices for customcheckout.
+    tags:
+    - practices
+    - standards
+    - architecture
+    repos:
+    - customcheckout
+  automatic-discounts:
+    description: Automatic discount feature memory across checkout and discount sync
+      services.
+    tags:
+    - discounts
+    - checkout
+    - shopify-sync
+    repos:
+    - customcheckout
+    - shopify-discount-import-dapr
+    - product-docs
+  checkout-tax:
+    description: Example future project for checkout tax logic and integrations.
+    tags:
+    - tax
+    - checkout
+    repos: []
+  multiple-queued-charges:
+    description: Multiple queued charges project memory
+    tags:
+    - charges
+    - charge
+    - checkout
+    - subscriptions
+    - purchase_items
+    - purchase_item
+    - plan
+    - plans
+    repos:
+    - customcheckout
+repos:
+  customcheckout:
+    root: /Users/willjayroe/Desktop/repos/customcheckout
+    default_active_project: multiple-queued-charges
+    include:
+    - '**/*.py'
+    - '**/*.md'
+    - '**/*.rst'
+    - '**/*.txt'
+    exclude:
+    - '**/.git/**'
+    - '**/.venv/**'
+    - '**/__pycache__/**'
+    - '**/.pytest_cache/**'
+    - '**/node_modules/**'
+    - '**/migrations/**'
+    default_tags:
+    - customcheckout
+  shopify-discount-import-dapr:
+    root: /Users/willjayroe/Desktop/repos/shopify-discount-import-dapr
+    default_active_project: automatic-discounts
+    include:
+    - '**/*.py'
+    - '**/*.md'
+    - '**/*.rst'
+    - '**/*.txt'
+    exclude:
+    - '**/.git/**'
+    - '**/.venv/**'
+    - '**/__pycache__/**'
+    - '**/.pytest_cache/**'
+    - '**/node_modules/**'
+    default_tags:
+    - shopify-discount-import-dapr
+  product-docs:
+    root: /Users/willjayroe/Downloads
+    include:
+    - '**/*.pdf'
+    - '**/*.md'
+    - '**/*.rst'
+    - '**/*.txt'
+    exclude:
+    - '**/.git/**'
+    - '**/.venv/**'
+    - '**/__pycache__/**'
+    - '**/.pytest_cache/**'
+    - '**/node_modules/**'
+    default_tags:
+    - product-docs
+    - prd
+context_packs:
+  default_3_layer:
+    layer_1:
+      query: engineering best practices, architecture constraints, coding standards
+      project_ids_from: org_practice_projects
+    layer_2:
+      query_template: '{active_project} architecture, recent decisions, constraints'
+      project_ids_from: '[active_project] + org_practice_projects'
+    layer_3:
+      query_template: '{active_project} in repo {repo}, critical files and flow constraints'
+      project_ids_from: '[active_project] + org_practice_projects'
+      repo_filter: true
+      categories:
+      - code
+      - summary
+      - decision
+      - architecture
+      - documentation
