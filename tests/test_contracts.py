@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import memory_types as contracts_module
 
 
-def test_search_context_request_parsing_and_clamps(contracts_module):
+def test_search_context_request_parsing_and_clamps():
     policy = contracts_module.SearchContextParsePolicy(
         max_projects_per_query=10,
         default_limit=8,
@@ -46,7 +47,7 @@ def test_search_context_request_parsing_and_clamps(contracts_module):
     assert request.excerpt_chars == 420
 
 
-def test_store_list_delete_request_parsing_defaults(contracts_module):
+def test_store_list_delete_request_parsing_defaults():
     store = contracts_module.StoreMemoryRequest.from_arguments(
         {"content": "  keep this  ", "source_kind": "decision", "project_id": ""},
         default_project_id="customcheckout-practices",
@@ -84,7 +85,7 @@ def test_store_list_delete_request_parsing_defaults(contracts_module):
     assert fetched.response_format == "json"
 
 
-def test_ingest_request_models_from_namespace(contracts_module):
+def test_ingest_request_models_from_namespace():
     repo_req = contracts_module.RepoIngestRequest.from_namespace(
         argparse.Namespace(
             project="automatic-discounts",

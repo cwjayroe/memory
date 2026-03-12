@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import mcp_server as mcp_module
+
 
 def _run_tool(module, name: str, arguments: dict):
     return asyncio.run(module.call_tool(name, arguments))[0].text
@@ -32,7 +34,7 @@ class _FakeItem:
 # ---------------------------------------------------------------------------
 
 
-def test_ingest_repo_happy_path(mcp_module, monkeypatch, tmp_path):
+def test_ingest_repo_happy_path(monkeypatch, tmp_path):
     (tmp_path / "a.py").write_text("x")
     (tmp_path / "b.py").write_text("y")
 
@@ -56,7 +58,7 @@ def test_ingest_repo_happy_path(mcp_module, monkeypatch, tmp_path):
     assert "stored=6" in text
 
 
-def test_ingest_repo_root_not_found(mcp_module, monkeypatch):
+def test_ingest_repo_root_not_found(monkeypatch):
     @dataclass
     class _FakeRepoConfig:
         root: Path = Path("/nonexistent/path/abc")
@@ -77,7 +79,7 @@ def test_ingest_repo_root_not_found(mcp_module, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ingest_file_happy_path(mcp_module, monkeypatch, tmp_path):
+def test_ingest_file_happy_path(monkeypatch, tmp_path):
     path = tmp_path / "service.py"
     path.write_text("pass")
 
@@ -90,7 +92,7 @@ def test_ingest_file_happy_path(mcp_module, monkeypatch, tmp_path):
     assert "stored=2" in text
 
 
-def test_ingest_file_not_found(mcp_module, monkeypatch, tmp_path):
+def test_ingest_file_not_found(monkeypatch, tmp_path):
     missing = tmp_path / "missing.py"
 
     text = _run_tool(mcp_module, "ingest_file", {"project": "my-project", "repo": "customcheckout", "path": str(missing)})
@@ -103,7 +105,7 @@ def test_ingest_file_not_found(mcp_module, monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_prune_memories_by_fingerprint(mcp_module, monkeypatch):
+def test_prune_memories_by_fingerprint(monkeypatch):
     items = [
         _FakeItem("id-1", _FakeMeta(fingerprint="fp1", updated_at="2026-03-03T00:00:00")),
         _FakeItem("id-2", _FakeMeta(fingerprint="fp1", updated_at="2026-03-01T00:00:00")),
@@ -121,7 +123,7 @@ def test_prune_memories_by_fingerprint(mcp_module, monkeypatch):
     assert "path=0" in text
 
 
-def test_prune_memories_by_path(mcp_module, monkeypatch, tmp_path):
+def test_prune_memories_by_path(monkeypatch, tmp_path):
     existing_file = tmp_path / "exists.py"
     existing_file.write_text("x")
 
@@ -141,7 +143,7 @@ def test_prune_memories_by_path(mcp_module, monkeypatch, tmp_path):
     assert "path=1" in text
 
 
-def test_prune_memories_both(mcp_module, monkeypatch, tmp_path):
+def test_prune_memories_both(monkeypatch, tmp_path):
     existing = tmp_path / "real.py"
     existing.write_text("x")
     items = [
@@ -166,7 +168,7 @@ def test_prune_memories_both(mcp_module, monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_init_project_creates_new_entry(mcp_module, monkeypatch):
+def test_init_project_creates_new_entry(monkeypatch):
     written: list[dict] = []
 
     monkeypatch.setattr(mcp_module, "validate_project_id", lambda _p: None)
@@ -188,7 +190,7 @@ def test_init_project_creates_new_entry(mcp_module, monkeypatch):
     assert "customcheckout" in projects["my-project"]["repos"]
 
 
-def test_init_project_requires_repos(mcp_module, monkeypatch):
+def test_init_project_requires_repos(monkeypatch):
     monkeypatch.setattr(mcp_module, "validate_project_id", lambda _p: None)
 
     text = _run_tool(mcp_module, "init_project", {"project": "my-project", "repos": []})
@@ -196,7 +198,7 @@ def test_init_project_requires_repos(mcp_module, monkeypatch):
     assert "at least one" in text
 
 
-def test_init_project_merges_existing(mcp_module, monkeypatch):
+def test_init_project_merges_existing(monkeypatch):
     written: list[dict] = []
     existing_manifest = {
         "projects": {
@@ -230,13 +232,13 @@ def test_init_project_merges_existing(mcp_module, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_clear_memories_requires_confirm(mcp_module):
+def test_clear_memories_requires_confirm():
     text = _run_tool(mcp_module, "clear_memories", {"project": "my-project"})
 
     assert "confirm=true" in text.lower() or "confirm" in text
 
 
-def test_clear_memories_with_confirm(mcp_module, monkeypatch):
+def test_clear_memories_with_confirm(monkeypatch):
     items = [
         _FakeItem("id-1"),
         _FakeItem("id-2"),

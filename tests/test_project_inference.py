@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import helpers as helpers_module
+import manifest as manifest_module
+import memory_types as contracts_module
+import server_config as server_config_module
+
 
 def _resolve_scope(
-    helpers_module,
-    contracts_module,
-    server_config_module,
     *,
     query: str,
     repo: str | None = None,
@@ -22,7 +24,7 @@ def _resolve_scope(
 
 
 def test_infer_from_project_id_tokens(
-    helpers_module, contracts_module, server_config_module, manifest_module, monkeypatch
+    monkeypatch
 ):
     monkeypatch.setattr(
         manifest_module,
@@ -37,9 +39,6 @@ def test_infer_from_project_id_tokens(
     )
 
     _, scope_source, inferred = _resolve_scope(
-        helpers_module,
-        contracts_module,
-        server_config_module,
         query="show me the automatic discounts product doc",
     )
     assert scope_source == "inferred"
@@ -48,7 +47,7 @@ def test_infer_from_project_id_tokens(
 
 
 def test_infer_from_tags(
-    helpers_module, contracts_module, server_config_module, manifest_module, monkeypatch
+    monkeypatch
 ):
     monkeypatch.setattr(
         manifest_module,
@@ -63,9 +62,6 @@ def test_infer_from_tags(
     )
 
     _, scope_source, inferred = _resolve_scope(
-        helpers_module,
-        contracts_module,
-        server_config_module,
         query="need coding standards and architecture constraints",
     )
     assert scope_source == "inferred"
@@ -74,7 +70,7 @@ def test_infer_from_tags(
 
 
 def test_infer_uses_repo_hint(
-    helpers_module, contracts_module, server_config_module, manifest_module, monkeypatch
+    monkeypatch
 ):
     monkeypatch.setattr(
         manifest_module,
@@ -92,9 +88,6 @@ def test_infer_uses_repo_hint(
     )
 
     _, scope_source, inferred = _resolve_scope(
-        helpers_module,
-        contracts_module,
-        server_config_module,
         query="discount sync service behavior",
         repo="shopify-discount-import-dapr",
     )
@@ -104,7 +97,7 @@ def test_infer_uses_repo_hint(
 
 
 def test_infer_top_two_deterministic_tie_break(
-    helpers_module, contracts_module, server_config_module, manifest_module, monkeypatch
+    monkeypatch
 ):
     monkeypatch.setattr(
         manifest_module,
@@ -120,9 +113,6 @@ def test_infer_top_two_deterministic_tie_break(
     )
 
     _, scope_source, inferred = _resolve_scope(
-        helpers_module,
-        contracts_module,
-        server_config_module,
         query="checkout",
     )
     assert scope_source == "inferred"

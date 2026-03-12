@@ -1,6 +1,8 @@
 from __future__ import annotations
+import helpers as helpers_module
+import memory_types as dataclasses_module
 
-def test_memory_metadata_and_item_from_dict_preserve_known_and_extra_fields(dataclasses_module):
+def test_memory_metadata_and_item_from_dict_preserve_known_and_extra_fields():
     item = dataclasses_module.MemoryItem.from_dict(
         {
             "id": "mem-1",
@@ -30,7 +32,7 @@ def test_memory_metadata_and_item_from_dict_preserve_known_and_extra_fields(data
     assert item.extra["custom_item"] == 42
 
 
-def test_memory_item_get_metadata_is_dict_compatible(dataclasses_module):
+def test_memory_item_get_metadata_is_dict_compatible():
     item = dataclasses_module.MemoryItem.from_dict(
         {
             "id": "mem-2",
@@ -50,7 +52,7 @@ def test_memory_item_get_metadata_is_dict_compatible(dataclasses_module):
     assert metadata.get("tags") == ["checkout"]
 
 
-def test_get_all_items_returns_memory_item_instances(helpers_module):
+def test_get_all_items_returns_memory_item_instances():
     class _Memory:
         def get_all(self, **_kwargs):
             return {

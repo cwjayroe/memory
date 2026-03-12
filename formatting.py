@@ -7,12 +7,8 @@ import json
 import re
 from typing import Any
 
-try:
-    from .memory_types import MemoryItem
-    from .scoring import get_metadata
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from memory_types import MemoryItem  # type: ignore
-    from scoring import get_metadata  # type: ignore
+from memory_types import MemoryItem
+from scoring import get_metadata
 
 
 @dataclass(frozen=True)

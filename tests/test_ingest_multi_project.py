@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 
+import ingest as ingest_module
+import manifest as manifest_module
 
-def test_manifest_v1_migrates_to_v2(manifest_module):
+
+def test_manifest_v1_migrates_to_v2():
     legacy = {
         "projects": {
             "automatic-discounts": {
@@ -29,7 +32,7 @@ def test_manifest_v1_migrates_to_v2(manifest_module):
     assert migrated["repos"]["customcheckout"]["default_active_project"] == "automatic-discounts"
 
 
-def test_context_plan_uses_repo_default_and_org_practices(ingest_module, manifest_module):
+def test_context_plan_uses_repo_default_and_org_practices():
     manifest = {
         "version": 2,
         "defaults": {
@@ -68,7 +71,7 @@ def test_context_plan_uses_repo_default_and_org_practices(ingest_module, manifes
     assert plan["layers"][2]["payload"]["repo"] == "customcheckout"
 
 
-def test_validate_project_id(ingest_module):
+def test_validate_project_id():
     ingest_module.validate_project_id("checkout-tax")
     try:
         ingest_module.validate_project_id("CheckoutTax")
@@ -78,7 +81,7 @@ def test_validate_project_id(ingest_module):
         raise AssertionError("Expected invalid project id to raise ValueError")
 
 
-def test_policy_actions_preserve_decisions(ingest_module):
+def test_policy_actions_preserve_decisions():
     items = [
         {
             "id": "decision-1",
@@ -133,7 +136,7 @@ def test_policy_actions_preserve_decisions(ingest_module):
     assert "summary-2" in policy["delete_ids"]
 
 
-def test_project_init_uses_manifest_root_helper(ingest_module, tmp_path):
+def test_project_init_uses_manifest_root_helper(tmp_path):
     manifest_path = tmp_path / "projects.yaml"
     args = argparse.Namespace(
         project="checkout-tax",

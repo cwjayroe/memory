@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from pathlib import Path
+
+import chunking as chunking_module
+import ingest as ingest_module
 
 
 class _FakeMemory:
@@ -26,7 +30,7 @@ class _FakeMemory:
         }
 
 
-def test_chunk_text_empty_short_and_overlap(chunking_module):
+def test_chunk_text_empty_short_and_overlap():
     assert chunking_module.chunk_text("   ") == []
     assert chunking_module.chunk_text("short", max_chars=10, overlap=2) == ["short"]
 
@@ -34,7 +38,7 @@ def test_chunk_text_empty_short_and_overlap(chunking_module):
     assert chunks == ["abcde", "defgh", "ghij"]
 
 
-def test_chunk_markdown_by_headings(chunking_module):
+def test_chunk_markdown_by_headings():
     path = Path("product-doc.md")
     text = "# Scope\nline one\n# Constraints\nline two"
 
@@ -46,7 +50,7 @@ def test_chunk_markdown_by_headings(chunking_module):
     assert "Constraints" in chunks[1].content
 
 
-def test_chunk_python_docstrings_extracts_module_class_function(chunking_module):
+def test_chunk_python_docstrings_extracts_module_class_function():
     path = Path("sample.py")
     text = '''"""module docs"""
 
@@ -66,7 +70,7 @@ def run():
     assert {chunk.module for chunk in chunks} >= {"sample", "Demo", "run"}
 
 
-def test_chunk_python_code_syntax_error_fallback(chunking_module):
+def test_chunk_python_code_syntax_error_fallback():
     path = Path("broken.py")
     text = "def broken(:\n    pass"
 
@@ -78,7 +82,7 @@ def test_chunk_python_code_syntax_error_fallback(chunking_module):
     assert chunks[0].content.startswith("[broken.py]")
 
 
-def test_chunk_pdf_document_splits_structured_blocks_and_keeps_page_provenance(chunking_module, tmp_path: Path, monkeypatch):
+def test_chunk_pdf_document_splits_structured_blocks_and_keeps_page_provenance(tmp_path: Path, monkeypatch):
     pdf_path = tmp_path / "rules.pdf"
     pdf_path.write_text("placeholder")
 
@@ -118,7 +122,7 @@ def test_chunk_pdf_document_splits_structured_blocks_and_keeps_page_provenance(c
     assert all(chunk.content.startswith(f"[{pdf_path}::page-1::chunk-") for chunk in chunks)
 
 
-def test_should_include_and_collect_files(ingest_module, tmp_path: Path):
+def test_should_include_and_collect_files(tmp_path: Path):
     (tmp_path / "main.py").write_text("print('ok')")
     (tmp_path / "readme.md").write_text("docs")
     (tmp_path / "ignore").mkdir()
@@ -138,7 +142,7 @@ def test_should_include_and_collect_files(ingest_module, tmp_path: Path):
     assert rel_paths == ["main.py", "sub/keep.py"]
 
 
-def test_ingest_file_deletes_existing_path_entries_and_counts_stored(ingest_module, chunking_module, monkeypatch, tmp_path: Path):
+def test_ingest_file_deletes_existing_path_entries_and_counts_stored(monkeypatch, tmp_path: Path):
     path = tmp_path / "discounts.py"
     path.write_text("print('discounts')")
     resolved = str(path.resolve())
@@ -181,7 +185,7 @@ def test_ingest_file_deletes_existing_path_entries_and_counts_stored(ingest_modu
     assert len(stored_ids) == 2
 
 
-def test_run_file_ingest_merges_repo_default_tags(ingest_module, monkeypatch, tmp_path: Path):
+def test_run_file_ingest_merges_repo_default_tags(monkeypatch, tmp_path: Path):
     path = tmp_path / "product-doc.pdf"
     path.write_text("placeholder")
     captured: dict[str, object] = {}
@@ -211,7 +215,7 @@ def test_run_file_ingest_merges_repo_default_tags(ingest_module, monkeypatch, tm
     assert captured["tags"] == ["charge-updates", "prd", "product-docs"]
 
 
-def test_load_memory_session_returns_memory_and_items(ingest_module, monkeypatch):
+def test_load_memory_session_returns_memory_and_items(monkeypatch):
     class _FakeMemory:
         def get_all(self, **_kwargs):
             return {
@@ -241,7 +245,7 @@ def test_load_memory_session_returns_memory_and_items(ingest_module, monkeypatch
     assert hasattr(items[0], "metadata")
 
 
-def test_run_policy_dry_run_and_apply(ingest_module, monkeypatch, caplog):
+def test_run_policy_dry_run_and_apply(monkeypatch, caplog):
     monkeypatch.setattr(
         ingest_module,
         "build_policy_actions",
@@ -296,7 +300,7 @@ def test_run_policy_dry_run_and_apply(ingest_module, monkeypatch, caplog):
     assert deleted_ids == ["d1", "d2"]
 
 
-def test_run_clear_memories_cancel_and_confirm(ingest_module, monkeypatch, caplog):
+def test_run_clear_memories_cancel_and_confirm(monkeypatch, caplog):
     deleted_ids: list[str] = []
 
     class _FakeItem:
@@ -328,7 +332,7 @@ def test_run_clear_memories_cancel_and_confirm(ingest_module, monkeypatch, caplo
     assert deleted_ids == ["a", "b"]
 
 
-def test_build_parser_registers_commands_and_note_handler(ingest_module):
+def test_build_parser_registers_commands_and_note_handler():
     parser = ingest_module.build_parser()
     subparsers_action = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
     expected = {"repo", "file", "note", "list", "prune", "clear", "project-init", "context-plan", "policy-run"}
@@ -338,7 +342,7 @@ def test_build_parser_registers_commands_and_note_handler(ingest_module):
     assert parsed.func is ingest_module.cmd_note
 
 
-def test_ingest_file_with_no_chunks_only_deletes(ingest_module, monkeypatch, tmp_path: Path):
+def test_ingest_file_with_no_chunks_only_deletes(monkeypatch, tmp_path: Path):
     path = tmp_path / "empty.py"
     path.write_text("")
     items = [{"id": "stale", "metadata": {"repo": "r", "source_path": str(path.resolve())}}]
@@ -363,18 +367,18 @@ def test_ingest_file_with_no_chunks_only_deletes(ingest_module, monkeypatch, tmp
     assert deleted_ids == ["stale"]
 
 
-def test_main_dispatches_and_prints_help(ingest_module, monkeypatch, capsys):
+def test_main_dispatches_and_prints_help(monkeypatch, capsys):
     seen: list[str] = []
 
     def fake_note_handler(args):
         seen.append(args.project)
 
     monkeypatch.setitem(ingest_module.COMMAND_HANDLERS, "note", fake_note_handler)
-    monkeypatch.setattr(ingest_module.sys, "argv", ["ingest.py", "note", "--project", "automatic-discounts", "--text", "hello"])
+    monkeypatch.setattr(sys, "argv", ["ingest.py", "note", "--project", "automatic-discounts", "--text", "hello"])
     ingest_module.main()
     assert seen == ["automatic-discounts"]
 
-    monkeypatch.setattr(ingest_module.sys, "argv", ["ingest.py"])
+    monkeypatch.setattr(sys, "argv", ["ingest.py"])
     ingest_module.main()
     help_out = capsys.readouterr().out
     assert "usage:" in help_out

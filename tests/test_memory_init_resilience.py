@@ -5,8 +5,10 @@ import logging
 import threading
 import time
 
+import memory_manager as memory_manager_module
 
-def _manager(memory_manager_module):
+
+def _manager():
     return memory_manager_module.MemoryManager(
         config=memory_manager_module.ServerConfig(),
         scoring_engine=memory_manager_module.ScoringEngine(),
@@ -14,8 +16,8 @@ def _manager(memory_manager_module):
     )
 
 
-def test_get_memory_with_retry_recovers_transient_error(memory_manager_module, monkeypatch):
-    manager = _manager(memory_manager_module)
+def test_get_memory_with_retry_recovers_transient_error(monkeypatch):
+    manager = _manager()
     calls = {"count": 0}
     sentinel = object()
 
@@ -37,8 +39,8 @@ def test_get_memory_with_retry_recovers_transient_error(memory_manager_module, m
     assert calls["count"] == 2
 
 
-def test_concurrent_get_memory_with_retry_initializes_once(memory_manager_module, monkeypatch):
-    manager = _manager(memory_manager_module)
+def test_concurrent_get_memory_with_retry_initializes_once(monkeypatch):
+    manager = _manager()
     manager._memory_cache.clear()
     init_counter = {"count": 0}
     counter_lock = threading.Lock()
@@ -64,8 +66,8 @@ def test_concurrent_get_memory_with_retry_initializes_once(memory_manager_module
     assert all(result is results[0] for result in results)
 
 
-def test_search_project_sync_uses_retry_helper(memory_manager_module, monkeypatch):
-    manager = _manager(memory_manager_module)
+def test_search_project_sync_uses_retry_helper(monkeypatch):
+    manager = _manager()
     calls: list[str] = []
 
     class _DummyMemory:
@@ -83,8 +85,8 @@ def test_search_project_sync_uses_retry_helper(memory_manager_module, monkeypatc
     assert len(results) == 1
 
 
-def test_store_list_delete_use_retry_helper(memory_manager_module, monkeypatch):
-    manager = _manager(memory_manager_module)
+def test_store_list_delete_use_retry_helper(monkeypatch):
+    manager = _manager()
     calls: list[str] = []
 
     class _DummyMemory:

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import helpers as helpers_module
+import memory_types as dataclasses_module
+
 
 # ---------------------------------------------------------------------------
 # Minimal stand-ins for MemoryItem-like objects used by _find_ids
@@ -25,7 +28,7 @@ class _FakeItem:
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_tags_handles_str_list_and_none(helpers_module):
+def test_normalize_tags_handles_str_list_and_none():
     assert helpers_module.normalize_tags(None) == []
     assert helpers_module.normalize_tags("a, b, c") == ["a", "b", "c"]
     assert helpers_module.normalize_tags(["x", " y ", ""]) == ["x", "y"]
@@ -34,7 +37,7 @@ def test_normalize_tags_handles_str_list_and_none(helpers_module):
     assert helpers_module.normalize_tags("  single  ") == ["single"]
 
 
-def test_normalize_strings_handles_str_list_and_none(helpers_module):
+def test_normalize_strings_handles_str_list_and_none():
     assert helpers_module.normalize_strings(None) == []
     assert helpers_module.normalize_strings("a,b,c") == ["a", "b", "c"]
     assert helpers_module.normalize_strings(["x", " y ", ""]) == ["x", "y"]
@@ -46,7 +49,7 @@ def test_normalize_strings_handles_str_list_and_none(helpers_module):
 # ---------------------------------------------------------------------------
 
 
-def test_dedupe_keep_order_preserves_first_occurrence(helpers_module):
+def test_dedupe_keep_order_preserves_first_occurrence():
     assert helpers_module.dedupe_keep_order(["b", "a", "b", "c", "a"]) == ["b", "a", "c"]
     assert helpers_module.dedupe_keep_order(["", "a", ""]) == ["a"]
     assert helpers_module.dedupe_keep_order([]) == []
@@ -58,7 +61,7 @@ def test_dedupe_keep_order_preserves_first_occurrence(helpers_module):
 # ---------------------------------------------------------------------------
 
 
-def test_find_ids_by_upsert_key(helpers_module):
+def test_find_ids_by_upsert_key():
     items = [
         _FakeItem("id-1", _Meta(upsert_key="k1")),
         _FakeItem("id-2", _Meta(upsert_key="k2")),
@@ -69,7 +72,7 @@ def test_find_ids_by_upsert_key(helpers_module):
     assert helpers_module._find_ids(items, upsert_key="missing") == []
 
 
-def test_find_ids_by_fingerprint(helpers_module):
+def test_find_ids_by_fingerprint():
     items = [
         _FakeItem("id-1", _Meta(fingerprint="fp1")),
         _FakeItem("id-2", _Meta(fingerprint="fp2")),
@@ -79,7 +82,7 @@ def test_find_ids_by_fingerprint(helpers_module):
     assert helpers_module._find_ids(items, fingerprint="missing") == []
 
 
-def test_find_ids_skips_non_string_ids(helpers_module):
+def test_find_ids_skips_non_string_ids():
     items = [
         _FakeItem(None, _Meta(upsert_key="k1")),
         _FakeItem(123, _Meta(upsert_key="k1")),  # type: ignore[arg-type]
@@ -93,14 +96,14 @@ def test_find_ids_skips_non_string_ids(helpers_module):
 # ---------------------------------------------------------------------------
 
 
-def test_matches_filters_repo(helpers_module):
+def test_matches_filters_repo():
     item = {"id": "x", "memory": "m", "metadata": {"repo": "customcheckout", "tags": []}}
     assert helpers_module._matches_filters(item, repo="customcheckout") is True
     assert helpers_module._matches_filters(item, repo="other") is False
     assert helpers_module._matches_filters(item) is True  # no filters → always passes
 
 
-def test_matches_filters_path_prefix(helpers_module):
+def test_matches_filters_path_prefix():
     item = {"id": "x", "memory": "m", "metadata": {"source_path": "/repo/cc/service.py", "tags": []}}
     assert helpers_module._matches_filters(item, path_prefix="/repo/cc") is True
     assert helpers_module._matches_filters(item, path_prefix="/repo/other") is False
@@ -108,13 +111,13 @@ def test_matches_filters_path_prefix(helpers_module):
     assert helpers_module._matches_filters(no_path, path_prefix="/repo/cc") is False
 
 
-def test_matches_filters_categories(helpers_module):
+def test_matches_filters_categories():
     item = {"id": "x", "memory": "m", "metadata": {"category": "decision", "tags": []}}
     assert helpers_module._matches_filters(item, categories=["decision", "summary"]) is True
     assert helpers_module._matches_filters(item, categories=["summary"]) is False
 
 
-def test_matches_filters_tags(helpers_module):
+def test_matches_filters_tags():
     item = {"id": "x", "memory": "m", "metadata": {"tags": ["a", "b"]}}
     assert helpers_module._matches_filters(item, tags=["b"]) is True
     assert helpers_module._matches_filters(item, tags=["c"]) is False
@@ -126,7 +129,7 @@ def test_matches_filters_tags(helpers_module):
 # ---------------------------------------------------------------------------
 
 
-def test_parse_datetime_handles_formats_and_errors(helpers_module):
+def test_parse_datetime_handles_formats_and_errors():
     assert helpers_module.parse_datetime("2026-03-01T00:00:00Z") is not None
     assert helpers_module.parse_datetime("2026-03-01T00:00:00+00:00") is not None
     assert helpers_module.parse_datetime("not-a-date") is None
@@ -135,7 +138,7 @@ def test_parse_datetime_handles_formats_and_errors(helpers_module):
     assert helpers_module.parse_datetime(42) is None
 
 
-def test_parse_datetime_attaches_utc_to_naive(helpers_module):
+def test_parse_datetime_attaches_utc_to_naive():
     dt = helpers_module.parse_datetime("2026-03-01T12:00:00")
     assert dt is not None
     assert dt.tzinfo is not None
@@ -146,7 +149,7 @@ def test_parse_datetime_attaches_utc_to_naive(helpers_module):
 # ---------------------------------------------------------------------------
 
 
-def test_is_transient_memory_init_error(helpers_module):
+def test_is_transient_memory_init_error():
     assert helpers_module._is_transient_memory_init_error(RuntimeError("RustBindingsAPI failed"))
     assert helpers_module._is_transient_memory_init_error(Exception("no attribute 'bindings'"))
     assert helpers_module._is_transient_memory_init_error(Exception("Could not connect to tenant"))
@@ -160,7 +163,7 @@ def test_is_transient_memory_init_error(helpers_module):
 # ---------------------------------------------------------------------------
 
 
-def test_results_from_payload_filters_non_dicts(helpers_module):
+def test_results_from_payload_filters_non_dicts():
     payload = {"results": [{"id": "a", "memory": "x"}, "bad", None, {"id": "b", "memory": "y"}]}
     results = helpers_module.results_from_payload(payload)
     assert len(results) == 2
@@ -168,7 +171,7 @@ def test_results_from_payload_filters_non_dicts(helpers_module):
     assert results[1].id == "b"
 
 
-def test_results_from_payload_handles_non_dict_input(helpers_module):
+def test_results_from_payload_handles_non_dict_input():
     assert helpers_module.results_from_payload("not-a-dict") == []
     assert helpers_module.results_from_payload(None) == []
     assert helpers_module.results_from_payload({"no_results_key": []}) == []
@@ -179,7 +182,7 @@ def test_results_from_payload_handles_non_dict_input(helpers_module):
 # ---------------------------------------------------------------------------
 
 
-def test_build_search_cache_key_is_deterministic(helpers_module, dataclasses_module):
+def test_build_search_cache_key_is_deterministic():
     policy = dataclasses_module.SearchContextParsePolicy(max_projects_per_query=5)
     req = dataclasses_module.SearchContextRequest.from_arguments(
         {"query": "discount architecture", "project_id": "automatic-discounts"},
@@ -190,7 +193,7 @@ def test_build_search_cache_key_is_deterministic(helpers_module, dataclasses_mod
     assert k1 == k2
 
 
-def test_build_search_cache_key_differs_by_query_and_projects(helpers_module, dataclasses_module):
+def test_build_search_cache_key_differs_by_query_and_projects():
     policy = dataclasses_module.SearchContextParsePolicy(max_projects_per_query=5)
     req1 = dataclasses_module.SearchContextRequest.from_arguments(
         {"query": "discounts", "project_id": "p1"},

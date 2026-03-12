@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+import mcp_server as mcp_module
+
 
 def _memory_item(*, score: float, project: str, repo: str, category: str, text: str):
     return {
@@ -22,12 +24,12 @@ def _run(module, args):
     return asyncio.run(module.call_tool("search_context", args))[0].text
 
 
-def test_unknown_tool_returns_expected_error(mcp_module):
+def test_unknown_tool_returns_expected_error():
     text = asyncio.run(mcp_module.call_tool("not_a_tool", {}))[0].text
     assert text == "Unknown tool: not_a_tool"
 
 
-def test_single_project_backward_compatible(mcp_module, monkeypatch):
+def test_single_project_backward_compatible(monkeypatch):
     async def fake_collect(_projects, _query, _candidate_limit):
         return {
             "automatic-discounts": [
@@ -59,7 +61,7 @@ def test_single_project_backward_compatible(mcp_module, monkeypatch):
     assert "distance=" in text
 
 
-def test_multi_project_and_repo_filter(mcp_module, monkeypatch):
+def test_multi_project_and_repo_filter(monkeypatch):
     async def fake_collect(_projects, _query, _candidate_limit):
         return {
             "automatic-discounts": [
@@ -111,7 +113,7 @@ def test_multi_project_and_repo_filter(mcp_module, monkeypatch):
     assert "project=customcheckout-practices" in text
 
 
-def test_debug_includes_score_components(mcp_module, monkeypatch):
+def test_debug_includes_score_components(monkeypatch):
     async def fake_collect(_projects, _query, _candidate_limit):
         return {
             "automatic-discounts": [
@@ -144,7 +146,7 @@ def test_debug_includes_score_components(mcp_module, monkeypatch):
     assert "final_score=" in text
 
 
-def test_inferred_scope_without_explicit_project_ids(mcp_module, monkeypatch):
+def test_inferred_scope_without_explicit_project_ids(monkeypatch):
     async def fake_collect(_projects, _query, _candidate_limit):
         return {
             "automatic-discounts": [
@@ -195,7 +197,7 @@ def test_inferred_scope_without_explicit_project_ids(mcp_module, monkeypatch):
     assert "project=automatic-discounts" in text
 
 
-def test_inferred_no_hit_triggers_fallback_retry(mcp_module, monkeypatch):
+def test_inferred_no_hit_triggers_fallback_retry(monkeypatch):
     calls: list[list[str]] = []
 
     async def fake_collect(_projects, _query, _candidate_limit):

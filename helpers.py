@@ -4,35 +4,18 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
-import sys
 from typing import Any
 from mem0 import Memory
 
-if __package__ in {None, ""}:
-    current_dir = Path(__file__).resolve().parent
-    if str(current_dir) not in sys.path:
-        sys.path.insert(0, str(current_dir))
-try:
-    from .memory_types import SearchContextRequest, MemoryItem
-    from .constants import (
-        DEFAULT_PROJECT_ID,
-        MEMORY_ROOT,
-        OLLAMA_BASE_URL,
-        OLLAMA_MODEL,
-        GET_ALL_LIMIT
-    )
-    from .server_config import ServerConfig
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from memory_types import SearchContextRequest, MemoryItem  # type: ignore
-    from constants import (  # type: ignore
-        DEFAULT_PROJECT_ID,
-        MEMORY_ROOT,
-        OLLAMA_BASE_URL,
-        OLLAMA_MODEL,
-        GET_ALL_LIMIT
-    )
-    from server_config import ServerConfig  # type: ignore
+from memory_types import SearchContextRequest, MemoryItem
+from constants import (
+    DEFAULT_PROJECT_ID,
+    MEMORY_ROOT,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    GET_ALL_LIMIT
+)
+from server_config import ServerConfig
 
 
 def _normalize_project_ids(value: Any, max_projects: int) -> list[str]:

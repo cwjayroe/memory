@@ -7,10 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-try:
-    from pypdf import PdfReader
-except Exception:  # pragma: no cover - optional dependency guard
-    PdfReader = None
+from pypdf import PdfReader
 
 MAX_CHARS = 3200
 OVERLAP_CHARS = 320

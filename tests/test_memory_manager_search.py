@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
+import mcp_server as mcp_module
 
-def test_collect_project_searches_handles_timeout_and_exceptions(mcp_module, monkeypatch):
+
+def test_collect_project_searches_handles_timeout_and_exceptions(monkeypatch):
     async def fake_search(project_id: str, _query: str, _candidate_limit: int):
         if project_id == "slow":
             await asyncio.sleep(0.05)
@@ -29,7 +31,7 @@ def test_collect_project_searches_handles_timeout_and_exceptions(mcp_module, mon
     assert results["slow"] == []
 
 
-def test_search_project_sync_returns_memoryitem_instances(mcp_module, monkeypatch):
+def test_search_project_sync_returns_memoryitem_instances(monkeypatch):
     class _SearchMemory:
         def search(self, **_kwargs):
             return {
@@ -52,7 +54,7 @@ def test_search_project_sync_returns_memoryitem_instances(mcp_module, monkeypatc
     assert results[0].metadata.repo == "customcheckout"
 
 
-def test_run_search_pass_filters_typed_items_and_backfills_project_id(mcp_module, monkeypatch):
+def test_run_search_pass_filters_typed_items_and_backfills_project_id(monkeypatch):
     kept_item = {
         "id": "k1",
         "memory": "kept item",

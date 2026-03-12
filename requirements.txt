@@ -4,3 +4,7 @@ numpy
 torch
 pypdf
 pytest-cov
+mcp
+mem0ai
+pyyaml
+pypdf

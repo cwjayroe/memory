@@ -12,95 +12,48 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import sys
 from typing import Any
 
 from mem0 import Memory
-
-if __package__ in {None, ""}:
-    current_dir = Path(__file__).resolve().parent
-    if str(current_dir) not in sys.path:
-        sys.path.insert(0, str(current_dir))
-try:
-    from .chunking import (  # noqa: F401 - re-exported for test monkeypatching
-        MAX_CHARS,
-        OVERLAP_CHARS,
-        chunk_file
-    )
-    from .constants import GET_ALL_LIMIT
-    from .memory_types import (
-        ClearRequest,
-        ContextPlanRequest,
-        DeleteMemoryRequest,
-        FileIngestRequest,
-        IngestListRequest,
-        ListMemoriesRequest,
-        NoteRequest,
-        PolicyRunRequest,
-        ProjectInitRequest,
-        PruneRequest,
-        RepoIngestRequest,
-        StoreMemoryRequest,
-    )
-    from .memory_manager import MemoryManager
-    from .manifest import (
-        DEFAULT_EXCLUDE,
-        DEFAULT_INCLUDE,
-        build_context_plan,
-        guess_repo_root,
-        read_manifest,
-        resolve_repo_config,
-        validate_project_id,
-        write_manifest,
-    )
-    from .helpers import (
-        dedupe_keep_order as _dedupe_keep_order,
-        get_all_items,
-        normalize_strings,
-        normalize_tags,
-        parse_datetime as _parse_datetime,
-        safe_dict as _safe_dict,
-    )
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from chunking import (  # type: ignore  # noqa: F401 - re-exported for test monkeypatching
-        MAX_CHARS,
-        OVERLAP_CHARS,
-        chunk_file
-    )
-    from constants import GET_ALL_LIMIT  # type: ignore
-    from memory_types import (  # type: ignore
-        ClearRequest,
-        ContextPlanRequest,
-        DeleteMemoryRequest,
-        FileIngestRequest,
-        IngestListRequest,
-        ListMemoriesRequest,
-        NoteRequest,
-        PolicyRunRequest,
-        ProjectInitRequest,
-        PruneRequest,
-        RepoIngestRequest,
-        StoreMemoryRequest,
-    )
-    from memory_manager import MemoryManager  # type: ignore
-    from manifest import (  # type: ignore
-        DEFAULT_EXCLUDE,
-        DEFAULT_INCLUDE,
-        build_context_plan,
-        guess_repo_root,
-        read_manifest,
-        resolve_repo_config,
-        validate_project_id,
-        write_manifest,
-    )
-    from helpers import (  # type: ignore
-        dedupe_keep_order as _dedupe_keep_order,
-        get_all_items,
-        normalize_strings,
-        normalize_tags,
-        parse_datetime as _parse_datetime,
-        safe_dict as _safe_dict,
-    )
+from chunking import (
+    MAX_CHARS,
+    OVERLAP_CHARS,
+    chunk_file
+)
+from constants import GET_ALL_LIMIT
+from memory_types import (
+    ClearRequest,
+    ContextPlanRequest,
+    DeleteMemoryRequest,
+    FileIngestRequest,
+    IngestListRequest,
+    ListMemoriesRequest,
+    NoteRequest,
+    PolicyRunRequest,
+    ProjectInitRequest,
+    PruneRequest,
+    RepoIngestRequest,
+    StoreMemoryRequest,
+)
+from memory_manager import MemoryManager
+from manifest import (
+    DEFAULT_EXCLUDE,
+    DEFAULT_INCLUDE,
+    build_context_plan,
+    guess_repo_root,
+    read_manifest,
+    resolve_repo_config,
+    validate_project_id,
+    write_manifest,
+)
+from helpers import (
+    dedupe_keep_order as _dedupe_keep_order,
+    get_all_items,
+    normalize_strings,
+    normalize_tags,
+    parse_datetime as _parse_datetime,
+    safe_dict as _safe_dict,
+)
 
 LOGGER = logging.getLogger(__name__)
 

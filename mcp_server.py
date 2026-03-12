@@ -7,95 +7,44 @@ from dataclasses import replace
 import logging
 import os
 from pathlib import Path
-import sys
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-if __package__ in {None, ""}:
-    current_dir = Path(__file__).resolve().parent
-    if str(current_dir) not in sys.path:
-        sys.path.insert(0, str(current_dir))
-try:
-    from .memory_types import (
-        ClearRequest,
-        DeleteMemoryRequest,
-        GetMemoryRequest,
-        ListMemoriesRequest,
-        ProjectInitRequest,
-        PruneRequest,
-        SearchContextParsePolicy,
-        SearchContextRequest,
-        StoreMemoryRequest,
-    )
-    from .formatting import ResultFormatter
-    from .scoring import RerankerManager, ScoringEngine
-    from .constants import DEFAULT_PROJECT_ID, GET_ALL_LIMIT
-    from .server_config import ServerConfig
-    from .memory_manager import MemoryManager
-    from .helpers import (
-        _resolve_search_scope,
-        _build_search_cache_key,
-        _resolve_org_practice_projects,
-        dedupe_keep_order,
-        normalize_strings,
-        normalize_tags,
-        safe_dict as _safe_dict,
-    )
-    from .ingest import ingest_file, collect_files, build_policy_actions
-    from .manifest import (
-        resolve_repo_config,
-        read_manifest,
-        write_manifest,
-        validate_project_id,
-        DEFAULT_EXCLUDE,
-        DEFAULT_INCLUDE,
-        guess_repo_root,
-    )
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from memory_types import (  # type: ignore
-        ClearRequest,
-        DeleteMemoryRequest,
-        GetMemoryRequest,
-        ListMemoriesRequest,
-        ProjectInitRequest,
-        PruneRequest,
-        SearchContextParsePolicy,
-        SearchContextRequest,
-        StoreMemoryRequest,
-    )
-    from formatting import ResultFormatter  # type: ignore
-    from scoring import (  # type: ignore
-        RerankerManager,
-        ScoringEngine,
-    )
-    from server_config import ServerConfig  # type: ignore
-    from memory_manager import MemoryManager  # type: ignore
-    from constants import (  # type: ignore
-        DEFAULT_PROJECT_ID,
-        GET_ALL_LIMIT,
-    )
-    from helpers import (  # type: ignore
-        _resolve_search_scope,
-        _build_search_cache_key,
-        _resolve_org_practice_projects,
-        dedupe_keep_order,
-        normalize_strings,
-        normalize_tags,
-        safe_dict as _safe_dict,
-    )
-    from ingest import ingest_file, collect_files, build_policy_actions  # type: ignore
-    from manifest import (  # type: ignore
-        resolve_repo_config,
-        read_manifest,
-        write_manifest,
-        validate_project_id,
-        DEFAULT_EXCLUDE,
-        DEFAULT_INCLUDE,
-        guess_repo_root,
-    )
+from memory_types import (
+    DeleteMemoryRequest,
+    GetMemoryRequest,
+    ListMemoriesRequest,
+    SearchContextParsePolicy,
+    SearchContextRequest,
+    StoreMemoryRequest,
+)
+from formatting import ResultFormatter
+from scoring import RerankerManager, ScoringEngine
+from constants import DEFAULT_PROJECT_ID, GET_ALL_LIMIT
+from server_config import ServerConfig
+from memory_manager import MemoryManager
+from helpers import (
+    _resolve_search_scope,
+    _build_search_cache_key,
+    _resolve_org_practice_projects,
+    dedupe_keep_order,
+    normalize_strings,
+    normalize_tags,
+    safe_dict as _safe_dict,
+)
+from ingest import ingest_file, collect_files
+from manifest import (
+    resolve_repo_config,
+    read_manifest,
+    write_manifest,
+    validate_project_id,
+    DEFAULT_EXCLUDE,
+    DEFAULT_INCLUDE,
+    guess_repo_root,
+)
 
 LOGGER = logging.getLogger(__name__)
 config = ServerConfig.from_env()

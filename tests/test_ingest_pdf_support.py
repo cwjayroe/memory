@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import chunking as chunking_module
+import ingest as ingest_module
 import pytest
 
 
@@ -21,7 +23,7 @@ class _FakePdfReader:
         ]
 
 
-def test_chunk_file_pdf_extracts_text(ingest_module, chunking_module, monkeypatch, tmp_path: Path):
+def test_chunk_file_pdf_extracts_text(monkeypatch, tmp_path: Path):
     pdf_path = tmp_path / "discounts-prd.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 test")
 
@@ -35,7 +37,7 @@ def test_chunk_file_pdf_extracts_text(ingest_module, chunking_module, monkeypatc
     assert any("Eligibility rules" in chunk.content for chunk in chunks)
 
 
-def test_chunk_file_pdf_requires_pypdf(ingest_module, chunking_module, monkeypatch, tmp_path: Path):
+def test_chunk_file_pdf_requires_pypdf(monkeypatch, tmp_path: Path):
     pdf_path = tmp_path / "discounts-prd.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 test")
 

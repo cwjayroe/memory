@@ -8,33 +8,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    from .constants import (
-        DEFAULT_PROJECT_ID,
-        MEMORY_ROOT,
-    )
-    from .helpers import (
-        dedupe_keep_order,
-        normalize_strings,
-        normalize_tags,
-        safe_dict,
-    )
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from helpers import (  # type: ignore
-        dedupe_keep_order,
-        normalize_strings,
-        normalize_tags,
-        safe_dict,
-    )
-    from constants import (  # type: ignore
-        DEFAULT_PROJECT_ID,
-        MEMORY_ROOT,
-    )
-
-try:
-    import yaml
-except Exception:  # pragma: no cover - optional dependency guard
-    yaml = None
+from helpers import ( 
+    dedupe_keep_order,
+    normalize_strings,
+    normalize_tags,
+    safe_dict,
+)
+from constants import (
+    DEFAULT_PROJECT_ID,
+    MEMORY_ROOT,
+)
+import yaml
 
 DEFAULT_INCLUDE = ["**/*.py", "**/*.md", "**/*.rst", "**/*.txt"]
 DEFAULT_EXCLUDE = [

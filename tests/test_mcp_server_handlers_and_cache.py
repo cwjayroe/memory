@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import mcp_server as mcp_module
+
 
 def _run_tool(module, name: str, arguments: dict):
     return asyncio.run(module.call_tool(name, arguments))[0].text
@@ -30,7 +32,7 @@ def _packed_item(*, project: str = "automatic-discounts", repo: str = "customche
 # ---------------------------------------------------------------------------
 
 
-def test_search_context_uses_cache_when_not_debug(mcp_module, monkeypatch):
+def test_search_context_uses_cache_when_not_debug(monkeypatch):
     run_calls = {"count": 0}
 
     async def fake_search(**_kwargs):
@@ -54,7 +56,7 @@ def test_search_context_uses_cache_when_not_debug(mcp_module, monkeypatch):
     assert "Found 1 memories for project=automatic-discounts" in first
 
 
-def test_search_context_debug_bypasses_cache(mcp_module, monkeypatch):
+def test_search_context_debug_bypasses_cache(monkeypatch):
     run_calls = {"count": 0}
 
     async def fake_search(**_kwargs):
@@ -79,7 +81,7 @@ def test_search_context_debug_bypasses_cache(mcp_module, monkeypatch):
     assert "debug:" in debug_text
 
 
-def test_search_cache_expired_entry_is_dropped(mcp_module):
+def test_search_cache_expired_entry_is_dropped():
     mcp_module.mem_manager._search_cache.clear()
     mcp_module.mem_manager._search_cache["k1"] = (0.0, "payload")
 
@@ -92,7 +94,7 @@ def test_search_cache_expired_entry_is_dropped(mcp_module):
 # ---------------------------------------------------------------------------
 
 
-def test_list_tools_schema_smoke(mcp_module):
+def test_list_tools_schema_smoke():
     tools = asyncio.run(mcp_module.list_tools())
     tool_map = {tool.name: tool for tool in tools}
 
@@ -105,7 +107,7 @@ def test_list_tools_schema_smoke(mcp_module):
     assert tool_map["get_memory"].inputSchema["required"] == ["memory_id"]
 
 
-def test_search_context_text_mode_uses_query_centered_excerpt(mcp_module, monkeypatch):
+def test_search_context_text_mode_uses_query_centered_excerpt(monkeypatch):
     run_calls = {"count": 0}
     long_prefix = "Scenario setup. " * 40
     matching_text = (
@@ -149,7 +151,7 @@ def test_search_context_text_mode_uses_query_centered_excerpt(mcp_module, monkey
     assert "Scenario setup." not in text
 
 
-def test_search_context_json_mode_can_include_full_text(mcp_module, monkeypatch):
+def test_search_context_json_mode_can_include_full_text(monkeypatch):
     async def fake_search(**_kwargs):
         return (
             [

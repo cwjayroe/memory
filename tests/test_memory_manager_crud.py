@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import json
 
+import mcp_server as mcp_module
+
 
 def _run_tool(module, name: str, arguments: dict):
     return asyncio.run(module.call_tool(name, arguments))[0].text
@@ -31,12 +33,12 @@ class _FakeMemory:
 # ---------------------------------------------------------------------------
 
 
-def test_store_memory_rejects_empty_content(mcp_module):
+def test_store_memory_rejects_empty_content():
     text = _run_tool(mcp_module, "store_memory", {"project_id": "automatic-discounts", "content": "   "})
     assert text == "Cannot store empty content."
 
 
-def test_store_memory_auto_fingerprint_and_dedupes_existing(mcp_module, monkeypatch):
+def test_store_memory_auto_fingerprint_and_dedupes_existing(monkeypatch):
     memory = _FakeMemory()
     project_id = "automatic-discounts"
     repo = "customcheckout"
@@ -77,7 +79,7 @@ def test_store_memory_auto_fingerprint_and_dedupes_existing(mcp_module, monkeypa
 # ---------------------------------------------------------------------------
 
 
-def test_list_memories_filters_and_paginates(mcp_module, monkeypatch):
+def test_list_memories_filters_and_paginates(monkeypatch):
     memory = _FakeMemory()
     all_memories = [
         {
@@ -141,7 +143,7 @@ def test_list_memories_filters_and_paginates(mcp_module, monkeypatch):
     assert "id=older" not in text
 
 
-def test_list_memories_no_results_message(mcp_module, monkeypatch):
+def test_list_memories_no_results_message(monkeypatch):
     memory = _FakeMemory()
 
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
@@ -156,7 +158,7 @@ def test_list_memories_no_results_message(mcp_module, monkeypatch):
     assert "No memories found for project=automatic-discounts" in text
 
 
-def test_list_memories_sorts_by_parsed_updated_at_with_fallback(mcp_module, monkeypatch):
+def test_list_memories_sorts_by_parsed_updated_at_with_fallback(monkeypatch):
     memory = _FakeMemory()
     all_memories = [
         {
@@ -210,7 +212,7 @@ def test_list_memories_sorts_by_parsed_updated_at_with_fallback(mcp_module, monk
     assert text.find("id=older") < text.find("id=invalid")
 
 
-def test_list_memories_json_mode_and_full_text_respects_pagination(mcp_module, monkeypatch):
+def test_list_memories_json_mode_and_full_text_respects_pagination(monkeypatch):
     memory = _FakeMemory()
     memory.all_results = [
         {
@@ -260,7 +262,7 @@ def test_list_memories_json_mode_and_full_text_respects_pagination(mcp_module, m
     assert payload["items"][0]["full_text"] == "newest memory"
 
 
-def test_get_memory_returns_untruncated_text_and_json(mcp_module, monkeypatch):
+def test_get_memory_returns_untruncated_text_and_json(monkeypatch):
     memory = _FakeMemory()
     full_text = "Charge rule body " * 80
     memory.all_results = [
@@ -306,7 +308,7 @@ def test_get_memory_returns_untruncated_text_and_json(mcp_module, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_delete_memory_by_id(mcp_module, monkeypatch):
+def test_delete_memory_by_id(monkeypatch):
     memory = _FakeMemory()
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
 
@@ -320,7 +322,7 @@ def test_delete_memory_by_id(mcp_module, monkeypatch):
     assert "Deleted memory_id=abc-123" in text
 
 
-def test_delete_memory_by_upsert_key(mcp_module, monkeypatch):
+def test_delete_memory_by_upsert_key(monkeypatch):
     memory = _FakeMemory()
     memory.all_results = [
         {"id": "d1", "metadata": {"upsert_key": "decision:one"}},
@@ -340,7 +342,7 @@ def test_delete_memory_by_upsert_key(mcp_module, monkeypatch):
     assert "Deleted 2 memories with upsert_key=decision:one" in text
 
 
-def test_delete_memory_requires_selector(mcp_module, monkeypatch):
+def test_delete_memory_requires_selector(monkeypatch):
     memory = _FakeMemory()
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
 

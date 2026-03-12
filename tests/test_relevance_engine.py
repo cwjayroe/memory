@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+import scoring as scoring_module
+
 
 def _make_item(*, score: float, category: str, repo: str = "customcheckout", project_id: str = "automatic-discounts", upsert_key: str | None = None):
     metadata = {
@@ -22,7 +24,7 @@ def _make_item(*, score: float, category: str, repo: str = "customcheckout", pro
     }
 
 
-def test_metadata_component_weights(scoring_module):
+def test_metadata_component_weights():
     engine = scoring_module.ScoringEngine()
     item = _make_item(score=0.2, category="decision")
     score = engine._metadata_component(
@@ -35,7 +37,7 @@ def test_metadata_component_weights(scoring_module):
     assert score == 1.0
 
 
-def test_dedupe_prefers_lower_distance(scoring_module):
+def test_dedupe_prefers_lower_distance():
     engine = scoring_module.ScoringEngine()
     item1 = _make_item(score=0.9, category="code", upsert_key="discounts:auto")
     item2 = _make_item(score=0.2, category="summary", upsert_key="discounts:auto")
@@ -44,7 +46,7 @@ def test_dedupe_prefers_lower_distance(scoring_module):
     assert deduped[0]["score"] == 0.2
 
 
-def test_pack_candidates_respects_budget_and_diversity(scoring_module):
+def test_pack_candidates_respects_budget_and_diversity():
     engine = scoring_module.ScoringEngine()
     candidates = [
         _make_item(score=0.95, category="summary"),

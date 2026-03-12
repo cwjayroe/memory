@@ -3,15 +3,9 @@ import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-try:
-    from .utils import safe_int, optional_str, as_bool, normalize_tags, normalize_strings, normalize_project_ids, normalize_response_format, normalize_excerpt_chars
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from utils import safe_int, optional_str, as_bool, normalize_tags, normalize_strings, normalize_project_ids , normalize_response_format, normalize_excerpt_chars # type: ignore
 
-try:
-    from .constants import DEFAULT_EXCERPT_CHARS
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from constants import DEFAULT_EXCERPT_CHARS  # type: ignore
+from utils import safe_int, optional_str, as_bool, normalize_tags, normalize_strings, normalize_project_ids , normalize_response_format, normalize_excerpt_chars # type: ignore
+from constants import DEFAULT_EXCERPT_CHARS 
 
 @dataclass
 class MemoryMetadata:
