@@ -12,9 +12,8 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mem0 import Memory
 from chunking import (
     MAX_CHARS,
     OVERLAP_CHARS,
@@ -35,7 +34,6 @@ from memory_types import (
     RepoIngestRequest,
     StoreMemoryRequest,
 )
-from memory_manager import MemoryManager
 from manifest import (
     DEFAULT_EXCLUDE,
     DEFAULT_INCLUDE,
@@ -59,12 +57,18 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MANIFEST = Path(__file__).with_name("projects.yaml")
 
+if TYPE_CHECKING:
+    from mem0 import Memory
+    from memory_manager import MemoryManager
+
 _MEM_MANAGER: MemoryManager | None = None
 
 
 def _get_mem_manager() -> MemoryManager:
     global _MEM_MANAGER
     if _MEM_MANAGER is None:
+        from memory_manager import MemoryManager
+
         _MEM_MANAGER = MemoryManager(logger=LOGGER)
     return _MEM_MANAGER
 
@@ -325,7 +329,7 @@ def _run_file_ingest(request: FileIngestRequest) -> None:
 
     tags = list(request.tags)
     try:
-        manifest = read_manifest(DEFAULT_MANIFEST)
+        manifest = read_manifest(request.manifest_path)
         repo_config = resolve_repo_config(
             manifest=manifest,
             project_id=request.project,
@@ -636,6 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
     file_cmd.add_argument("--path", required=True)
     file_cmd.add_argument("--mode", choices=["docstrings", "headings", "code-chunks", "mixed"], default="mixed")
     file_cmd.add_argument("--tags")
+    file_cmd.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     file_cmd.set_defaults(func=cmd_file)
 
     note_cmd = sub.add_parser("note", help="Store a decision or note in a selected scope")

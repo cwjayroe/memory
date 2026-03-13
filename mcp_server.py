@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import json
 import logging
 import os
 from pathlib import Path
@@ -35,8 +36,9 @@ from helpers import (
     normalize_tags,
     safe_dict as _safe_dict,
 )
-from ingest import ingest_file, collect_files
+from ingest import ingest_file, collect_files, build_policy_actions
 from manifest import (
+    build_context_plan,
     resolve_repo_config,
     read_manifest,
     write_manifest,
@@ -289,6 +291,20 @@ async def _handle_ingest_file(arguments: dict[str, Any]) -> list[TextContent]:
     if not path.exists():
         return [TextContent(type="text", text=f"File does not exist: {path}")]
 
+    try:
+        manifest = read_manifest(Path(config.manifest_path))
+        repo_config = resolve_repo_config(
+            manifest=manifest,
+            project_id=project,
+            repo=repo,
+            root_override=None,
+            include_override=None,
+            exclude_override=None,
+        )
+        tags = sorted(set(repo_config.default_tags + tags))
+    except ValueError as exc:
+        return [TextContent(type="text", text=str(exc))]
+
     items = mem_manager.get_all_items(project)
     deleted, stored = ingest_file(
         items=items,
@@ -362,6 +378,7 @@ async def _handle_init_project(arguments: dict[str, Any]) -> list[TextContent]:
     repos = normalize_strings(arguments.get("repos"))
     description = str(arguments.get("description") or "")
     tags = normalize_tags(arguments.get("tags"))
+    set_repo_defaults = bool(arguments.get("set_repo_defaults", False))
 
     if not repos:
         return [TextContent(type="text", text="repos must include at least one repo name.")]
@@ -392,8 +409,11 @@ async def _handle_init_project(arguments: dict[str, Any]) -> list[TextContent]:
                 "include": list(DEFAULT_INCLUDE),
                 "exclude": list(DEFAULT_EXCLUDE),
                 "default_tags": [repo_name],
-                "default_active_project": project,
+                "default_active_project": project if set_repo_defaults else None,
             }
+        elif set_repo_defaults:
+            repo_config["default_active_project"] = project
+            manifest_repos[repo_name] = repo_config
 
     manifest["projects"] = projects
     manifest["repos"] = manifest_repos
@@ -403,6 +423,73 @@ async def _handle_init_project(arguments: dict[str, Any]) -> list[TextContent]:
         type="text",
         text=f"Initialized project={project} repos={','.join(repos)}",
     )]
+
+
+async def _handle_context_plan(arguments: dict[str, Any]) -> list[TextContent]:
+    repo = str(arguments["repo"])
+    project = arguments.get("project") or None
+    pack = str(arguments.get("pack") or "default_3_layer")
+
+    try:
+        manifest = read_manifest(Path(config.manifest_path))
+        plan = build_context_plan(
+            manifest=manifest,
+            repo=repo,
+            explicit_project=project,
+            pack_name=pack,
+        )
+    except ValueError as exc:
+        return [TextContent(type="text", text=str(exc))]
+
+    return [TextContent(type="text", text=json.dumps(plan, indent=2))]
+
+
+async def _handle_policy_run(arguments: dict[str, Any]) -> list[TextContent]:
+    project = str(arguments.get("project") or DEFAULT_PROJECT_ID)
+    mode = str(arguments.get("mode") or "dry-run")
+    stale_days = max(0, int(arguments.get("stale_days", 45)))
+    summary_keep = max(1, int(arguments.get("summary_keep", 5)))
+    repo = arguments.get("repo") or None
+    path_prefix = arguments.get("path_prefix") or None
+
+    items = mem_manager.get_all_items(project)
+    policy = build_policy_actions(
+        items=[item.as_dict() for item in items],
+        stale_days=stale_days,
+        summary_keep=summary_keep,
+        repo=repo,
+        path_prefix=path_prefix,
+    )
+
+    if mode == "dry-run":
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    f"Policy run for project={project} mode=dry-run "
+                    f"scanned={policy['scanned_count']} delete_candidates={policy['delete_count']} "
+                    f"reason_counts={policy['reasons']}"
+                ),
+            )
+        ]
+
+    deleted = 0
+    for memory_id in policy["delete_ids"]:
+        mem_manager.delete_memory(
+            DeleteMemoryRequest(project_id=project, memory_id=memory_id, upsert_key=None)
+        )
+        deleted += 1
+
+    return [
+        TextContent(
+            type="text",
+            text=(
+                f"Policy run for project={project} mode=apply "
+                f"scanned={policy['scanned_count']} delete_candidates={policy['delete_count']} "
+                f"deleted={deleted} reason_counts={policy['reasons']}"
+            ),
+        )
+    ]
 
 
 async def _handle_clear_memories(arguments: dict[str, Any]) -> list[TextContent]:
@@ -463,6 +550,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _handle_init_project(arguments)
     elif name == "clear_memories":
         return await _handle_clear_memories(arguments)
+    elif name == "context_plan":
+        return await _handle_context_plan(arguments)
+    elif name == "policy_run":
+        return await _handle_policy_run(arguments)
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -668,6 +759,22 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="context_plan",
+            description=(
+                "Preview the resolved layered context payloads for a repo using the configured "
+                "manifest and context pack."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string"},
+                    "project": {"type": "string"},
+                    "pack": {"type": "string", "default": "default_3_layer"},
+                },
+                "required": ["repo"],
+            },
+        ),
+        Tool(
             name="prune_memories",
             description=(
                 "Remove duplicate or stale memories from a selected scope. "
@@ -706,8 +813,31 @@ async def list_tools() -> list[Tool]:
                     },
                     "description": {"type": "string"},
                     "tags": {"type": ["array", "string"], "items": {"type": "string"}},
+                    "set_repo_defaults": {"type": "boolean", "default": False},
                 },
                 "required": ["project", "repos"],
+            },
+        ),
+        Tool(
+            name="policy_run",
+            description=(
+                "Run the retention policy for a selected scope in dry-run or apply mode."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["dry-run", "apply"],
+                        "default": "dry-run",
+                    },
+                    "stale_days": {"type": "integer", "default": 45},
+                    "summary_keep": {"type": "integer", "default": 5},
+                    "repo": {"type": "string"},
+                    "path_prefix": {"type": "string"},
+                },
+                "required": ["project"],
             },
         ),
         Tool(

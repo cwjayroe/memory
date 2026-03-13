@@ -96,8 +96,10 @@ python mcp_server.py
 - `delete_memory`
 - `ingest_repo`
 - `ingest_file`
+- `context_plan`
 - `prune_memories`
 - `init_project`
+- `policy_run`
 - `clear_memories`
 
 ### `search_context`
@@ -144,9 +146,11 @@ Search behavior:
 ### Maintenance tools
 The MCP server also exposes maintenance operations for repo workflows:
 - `ingest_repo`: ingest all files for a manifest-backed repo profile
-- `ingest_file`: ingest one file
+- `ingest_file`: ingest one file and merge manifest-backed repo default tags
+- `context_plan`: preview the resolved layered context payloads for a repo
 - `prune_memories`: remove duplicate fingerprints and/or stale missing-path items in a selected scope
-- `init_project`: create or update a manifest scope entry using the current `project` field name
+- `init_project`: create or update a manifest scope entry using the current `project` field name, with optional `set_repo_defaults`
+- `policy_run`: preview or apply the retention policy through MCP
 - `clear_memories`: delete all memories for a selected scope after explicit confirmation
 
 ## Runtime configuration
@@ -240,6 +244,7 @@ Ingest a single file into a scope:
 python ingest.py file \
   --project migration-2026 \
   --repo worker-docs \
+  --manifest ./projects.yaml \
   --path ./docs/cutover-checklist.md \
   --mode mixed
 ```
@@ -293,6 +298,7 @@ If your manifest includes a repo profile for documents, ingest the PDF through t
 python ingest.py file \
   --project customer-escalation-acme \
   --repo product-docs \
+  --manifest ./projects.yaml \
   --path "/Users/willjayroe/Downloads/ACME Escalation Timeline.pdf" \
   --mode headings \
   --tags incident,customer

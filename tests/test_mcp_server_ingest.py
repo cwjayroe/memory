@@ -83,6 +83,12 @@ def test_ingest_file_happy_path(monkeypatch, tmp_path):
     path = tmp_path / "service.py"
     path.write_text("pass")
 
+    @dataclass
+    class _FakeRepoConfig:
+        default_tags: list = field(default_factory=lambda: ["customcheckout", "checkout"])
+
+    monkeypatch.setattr(mcp_module, "read_manifest", lambda _path: {})
+    monkeypatch.setattr(mcp_module, "resolve_repo_config", lambda **_kw: _FakeRepoConfig())
     monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda _project: [])
     monkeypatch.setattr(mcp_module, "ingest_file", lambda **_kw: (0, 2))
 
@@ -90,6 +96,54 @@ def test_ingest_file_happy_path(monkeypatch, tmp_path):
 
     assert "deleted=0" in text
     assert "stored=2" in text
+
+
+def test_ingest_file_merges_manifest_default_tags(monkeypatch, tmp_path):
+    path = tmp_path / "service.py"
+    path.write_text("pass")
+    captured: dict[str, object] = {}
+
+    @dataclass
+    class _FakeRepoConfig:
+        default_tags: list = field(default_factory=lambda: ["customcheckout", "checkout"])
+
+    monkeypatch.setattr(mcp_module, "read_manifest", lambda _path: {})
+    monkeypatch.setattr(mcp_module, "resolve_repo_config", lambda **_kw: _FakeRepoConfig())
+    monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda _project: [])
+
+    def _fake_ingest_file(**kwargs):
+        captured["tags"] = kwargs["tags"]
+        return 0, 1
+
+    monkeypatch.setattr(mcp_module, "ingest_file", _fake_ingest_file)
+
+    _run_tool(
+        mcp_module,
+        "ingest_file",
+        {"project": "my-project", "repo": "customcheckout", "path": str(path), "tags": ["manual"]},
+    )
+
+    assert captured["tags"] == ["checkout", "customcheckout", "manual"]
+
+
+def test_ingest_file_returns_manifest_validation_error(monkeypatch, tmp_path):
+    path = tmp_path / "service.py"
+    path.write_text("pass")
+
+    monkeypatch.setattr(mcp_module, "read_manifest", lambda _path: {})
+    monkeypatch.setattr(
+        mcp_module,
+        "resolve_repo_config",
+        lambda **_kw: (_ for _ in ()).throw(ValueError("repo mismatch")),
+    )
+
+    text = _run_tool(
+        mcp_module,
+        "ingest_file",
+        {"project": "my-project", "repo": "customcheckout", "path": str(path)},
+    )
+
+    assert text == "repo mismatch"
 
 
 def test_ingest_file_not_found(monkeypatch, tmp_path):
@@ -225,6 +279,85 @@ def test_init_project_merges_existing(monkeypatch):
     assert set(projects["my-project"]["repos"]) == {"existing-repo", "new-repo"}
     # existing-repo already in list → no duplicate
     assert projects["my-project"]["repos"].count("existing-repo") == 1
+
+
+def test_init_project_sets_repo_defaults_when_requested(monkeypatch):
+    written: list[dict] = []
+    existing_manifest = {
+        "projects": {
+            "my-project": {
+                "description": "old description",
+                "repos": ["existing-repo"],
+                "tags": ["old-tag"],
+            }
+        },
+        "repos": {
+            "existing-repo": {
+                "root": "/tmp/existing",
+                "include": ["**/*.py"],
+                "exclude": [],
+                "default_tags": ["existing-repo"],
+                "default_active_project": None,
+            }
+        },
+    }
+
+    monkeypatch.setattr(mcp_module, "validate_project_id", lambda _p: None)
+    monkeypatch.setattr(mcp_module, "read_manifest", lambda _path: existing_manifest)
+    monkeypatch.setattr(mcp_module, "write_manifest", lambda _path, manifest: written.append(manifest))
+
+    _run_tool(
+        mcp_module,
+        "init_project",
+        {"project": "my-project", "repos": ["existing-repo"], "set_repo_defaults": True},
+    )
+
+    assert written[0]["repos"]["existing-repo"]["default_active_project"] == "my-project"
+
+
+def test_context_plan_tool_returns_json(monkeypatch):
+    monkeypatch.setattr(
+        mcp_module,
+        "build_context_plan",
+        lambda **_kwargs: {"repo": "customcheckout", "layers": [{"layer": "layer_1"}]},
+    )
+    monkeypatch.setattr(mcp_module, "read_manifest", lambda _path: {})
+
+    text = _run_tool(mcp_module, "context_plan", {"repo": "customcheckout"})
+
+    assert '"repo": "customcheckout"' in text
+    assert '"layer": "layer_1"' in text
+
+
+def test_policy_run_dry_run_and_apply(monkeypatch):
+    monkeypatch.setattr(
+        mcp_module,
+        "build_policy_actions",
+        lambda **_kwargs: {
+            "delete_ids": ["id-1", "id-2"],
+            "delete_count": 2,
+            "scanned_count": 3,
+            "reasons": {"summary_over_limit": 1},
+        },
+    )
+    monkeypatch.setattr(
+        mcp_module.mem_manager,
+        "get_all_items",
+        lambda _project: [],
+    )
+    deleted_ids: list[str] = []
+    monkeypatch.setattr(
+        mcp_module.mem_manager,
+        "delete_memory",
+        lambda req: deleted_ids.append(req.memory_id),
+    )
+
+    dry_run = _run_tool(mcp_module, "policy_run", {"project": "my-project", "mode": "dry-run"})
+    applied = _run_tool(mcp_module, "policy_run", {"project": "my-project", "mode": "apply"})
+
+    assert "delete_candidates=2" in dry_run
+    assert "mode=apply" in applied
+    assert deleted_ids == ["id-1", "id-2"]
 
 
 # ---------------------------------------------------------------------------

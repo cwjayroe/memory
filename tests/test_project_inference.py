@@ -6,6 +6,12 @@ import memory_types as contracts_module
 import server_config as server_config_module
 
 
+def _reset_manifest_index_cache() -> None:
+    manifest_module._MANIFEST_INDEX_CACHE["path"] = None
+    manifest_module._MANIFEST_INDEX_CACHE["mtime"] = None
+    manifest_module._MANIFEST_INDEX_CACHE["index"] = None
+
+
 def _resolve_scope(
     *,
     query: str,
@@ -117,3 +123,67 @@ def test_infer_top_two_deterministic_tie_break(
     )
     assert scope_source == "inferred"
     assert [project_id for project_id, _ in inferred] == ["alpha-checkout", "beta-checkout"]
+
+
+def test_load_project_index_with_cache_falls_back_to_memory_root_and_default_project(
+    monkeypatch, tmp_path
+):
+    _reset_manifest_index_cache()
+    manifest_path = tmp_path / "missing-projects.yaml"
+
+    monkeypatch.setattr(
+        manifest_module,
+        "_discover_project_ids_from_memory_root",
+        lambda _memory_root: ["billing-domain"],
+    )
+
+    index = manifest_module.load_project_index_with_cache(
+        manifest_path=str(manifest_path),
+        default_project_id="engineering-standards",
+        memory_root=str(tmp_path / "memory-root"),
+    )
+
+    assert index == {
+        "projects": {
+            "billing-domain": {"tags": [], "repos": []},
+            "engineering-standards": {"tags": [], "repos": []},
+        },
+        "org_practice_projects": [],
+    }
+
+
+def test_load_project_index_with_cache_reuses_cached_fallback_index(
+    monkeypatch, tmp_path
+):
+    _reset_manifest_index_cache()
+    manifest_path = tmp_path / "projects.yaml"
+    manifest_path.write_text("{}", encoding="utf-8")
+    discover_calls = {"count": 0}
+
+    def _discover(_memory_root: str) -> list[str]:
+        discover_calls["count"] += 1
+        return ["alpha-scope"]
+
+    monkeypatch.setattr(
+        manifest_module,
+        "_discover_project_ids_from_memory_root",
+        _discover,
+    )
+
+    first = manifest_module.load_project_index_with_cache(
+        manifest_path=str(manifest_path),
+        default_project_id="engineering-standards",
+        memory_root=str(tmp_path / "memory-root"),
+    )
+    second = manifest_module.load_project_index_with_cache(
+        manifest_path=str(manifest_path),
+        default_project_id="engineering-standards",
+        memory_root=str(tmp_path / "memory-root"),
+    )
+
+    assert discover_calls["count"] == 1
+    assert first == second
+    assert second["projects"] == {
+        "alpha-scope": {"tags": [], "repos": []},
+        "engineering-standards": {"tags": [], "repos": []},
+    }

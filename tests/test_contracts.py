@@ -101,6 +101,19 @@ def test_ingest_request_models_from_namespace():
     assert repo_req.tags == ["discounts", "checkout"]
     assert str(repo_req.manifest_path) == "/tmp/projects.yaml"
 
+    file_req = contracts_module.FileIngestRequest.from_namespace(
+        argparse.Namespace(
+            project="automatic-discounts",
+            repo="customcheckout",
+            path="/tmp/service.py",
+            mode="mixed",
+            tags="discounts,checkout",
+            manifest="/tmp/file-projects.yaml",
+        )
+    )
+    assert file_req.tags == ["discounts", "checkout"]
+    assert str(file_req.manifest_path) == "/tmp/file-projects.yaml"
+
     init_req = contracts_module.ProjectInitRequest.from_namespace(
         argparse.Namespace(
             project="checkout-tax",

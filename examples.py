@@ -2,13 +2,23 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
+from typing import Any
 
 
-def build_server(default_scope: str) -> StdioServerParameters:
-    return StdioServerParameters(
+def _require_mcp() -> tuple[Any, Any, Any]:
+    try:
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "Examples require the 'mcp' package. Install project dependencies first."
+        ) from exc
+    return ClientSession, stdio_client, StdioServerParameters
+
+
+def build_server(default_scope: str) -> Any:
+    _client_session, _stdio_client, stdio_server_parameters = _require_mcp()
+    return stdio_server_parameters(
         command=sys.executable,
         args=[str(Path(__file__).with_name("mcp_server.py"))],
         env={
@@ -21,16 +31,18 @@ def build_server(default_scope: str) -> StdioServerParameters:
 
 
 async def list_tools_example() -> None:
+    client_session, stdio_client, _stdio_server_parameters = _require_mcp()
     async with stdio_client(build_server("engineering-standards")) as (r, w):
-        async with ClientSession(r, w) as session:
+        async with client_session(r, w) as session:
             await session.initialize()
             tools = await session.list_tools()
             print([tool.name for tool in tools.tools])
 
 
 async def search_context_example() -> None:
+    client_session, stdio_client, _stdio_server_parameters = _require_mcp()
     async with stdio_client(build_server("billing-domain")) as (r, w):
-        async with ClientSession(r, w) as session:
+        async with client_session(r, w) as session:
             await session.initialize()
             result = await session.call_tool(
                 "search_context",
@@ -44,8 +56,9 @@ async def search_context_example() -> None:
 
 
 async def store_list_delete_example() -> None:
+    client_session, stdio_client, _stdio_server_parameters = _require_mcp()
     async with stdio_client(build_server("customer-escalation-acme")) as (r, w):
-        async with ClientSession(r, w) as session:
+        async with client_session(r, w) as session:
             await session.initialize()
             store = await session.call_tool(
                 "store_memory",
@@ -78,6 +91,15 @@ async def store_list_delete_example() -> None:
             print("DELETE:", deleted.content[0].text)
 
 
-asyncio.run(list_tools_example())
-asyncio.run(search_context_example())
-asyncio.run(store_list_delete_example())
+async def run_examples() -> None:
+    await list_tools_example()
+    await search_context_example()
+    await store_list_delete_example()
+
+
+def main() -> None:
+    asyncio.run(run_examples())
+
+
+if __name__ == "__main__":
+    main()

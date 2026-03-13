@@ -71,6 +71,22 @@ def test_context_plan_uses_repo_default_and_org_practices():
     assert plan["layers"][2]["payload"]["repo"] == "customcheckout"
 
 
+def test_context_plan_rejects_unknown_pack():
+    manifest = {"version": 2, "projects": {}, "repos": {}, "context_packs": {}}
+
+    try:
+        ingest_module.build_context_plan(
+            manifest=manifest,
+            repo="customcheckout",
+            explicit_project=None,
+            pack_name="missing-pack",
+        )
+    except ValueError as exc:
+        assert "Context pack not found" in str(exc)
+    else:
+        raise AssertionError("Expected missing context pack to raise ValueError")
+
+
 def test_validate_project_id():
     ingest_module.validate_project_id("checkout-tax")
     try:
@@ -134,6 +150,38 @@ def test_policy_actions_preserve_decisions():
 
     assert "decision-1" not in policy["delete_ids"]
     assert "summary-2" in policy["delete_ids"]
+
+
+def test_resolve_repo_config_rejects_repo_outside_project():
+    manifest = {
+        "version": 2,
+        "projects": {
+            "checkout-tax": {"repos": ["customcheckout"]},
+        },
+        "repos": {
+            "shopify-discount-import-dapr": {
+                "root": ".",
+                "include": ["**/*.py"],
+                "exclude": [],
+                "default_tags": ["sync"],
+            }
+        },
+    }
+
+    try:
+        manifest_module.resolve_repo_config(
+            manifest=manifest,
+            project_id="checkout-tax",
+            repo="shopify-discount-import-dapr",
+            root_override=None,
+            include_override=None,
+            exclude_override=None,
+        )
+    except ValueError as exc:
+        assert "checkout-tax" in str(exc)
+        assert "shopify-discount-import-dapr" in str(exc)
+    else:
+        raise AssertionError("Expected undeclared repo to raise ValueError")
 
 
 def test_project_init_uses_manifest_root_helper(tmp_path):

@@ -4,8 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from typing import Any
-from mem0 import Memory
+from typing import TYPE_CHECKING, Any
 
 from memory_types import SearchContextRequest, MemoryItem
 from constants import (
@@ -16,6 +15,9 @@ from constants import (
     GET_ALL_LIMIT
 )
 from server_config import ServerConfig
+
+if TYPE_CHECKING:
+    from mem0 import Memory
 
 
 def _normalize_project_ids(value: Any, max_projects: int) -> list[str]:

@@ -184,7 +184,10 @@ def resolve_repo_config(
     project_config = safe_dict(safe_dict(data.get("projects")).get(project_id))
     project_repos = normalize_strings(project_config.get("repos"))
     if project_repos and repo not in project_repos:
-        pass
+        raise ValueError(
+            f"Repo '{repo}' is not configured for project '{project_id}'. "
+            f"Allowed repos: {', '.join(project_repos)}"
+        )
 
     root = Path(root_override or repo_config.get("root") or ".").expanduser().resolve()
     include = include_override or normalize_strings(repo_config.get("include")) or list(DEFAULT_INCLUDE)

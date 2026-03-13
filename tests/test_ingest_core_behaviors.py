@@ -122,6 +122,27 @@ def test_chunk_pdf_document_splits_structured_blocks_and_keeps_page_provenance(t
     assert all(chunk.content.startswith(f"[{pdf_path}::page-1::chunk-") for chunk in chunks)
 
 
+def test_chunk_pdf_document_returns_placeholder_when_no_text(tmp_path: Path, monkeypatch):
+    pdf_path = tmp_path / "empty.pdf"
+    pdf_path.write_text("placeholder")
+
+    class _FakePage:
+        def extract_text(self):
+            return ""
+
+    class _FakeReader:
+        def __init__(self, _path: str):
+            self.pages = [_FakePage()]
+
+    monkeypatch.setattr(chunking_module, "PdfReader", _FakeReader)
+
+    chunks = chunking_module.chunk_pdf_document(pdf_path)
+
+    assert len(chunks) == 1
+    assert "(No extractable text found in PDF.)" in chunks[0].content
+    assert chunks[0].category == "documentation"
+
+
 def test_should_include_and_collect_files(tmp_path: Path):
     (tmp_path / "main.py").write_text("print('ok')")
     (tmp_path / "readme.md").write_text("docs")
@@ -189,11 +210,16 @@ def test_run_file_ingest_merges_repo_default_tags(monkeypatch, tmp_path: Path):
     path = tmp_path / "product-doc.pdf"
     path.write_text("placeholder")
     captured: dict[str, object] = {}
+    manifest_path = tmp_path / "projects.yaml"
 
     class _RepoConfig:
         default_tags = ["product-docs", "prd"]
 
-    monkeypatch.setattr(ingest_module, "read_manifest", lambda _path: {"repos": {}})
+    def _fake_read_manifest(path_arg):
+        captured["manifest_path"] = path_arg
+        return {"repos": {}}
+
+    monkeypatch.setattr(ingest_module, "read_manifest", _fake_read_manifest)
     monkeypatch.setattr(ingest_module, "resolve_repo_config", lambda **_kwargs: _RepoConfig())
     monkeypatch.setattr(ingest_module, "_load_memory_session", lambda _project: (object(), []))
 
@@ -209,10 +235,12 @@ def test_run_file_ingest_merges_repo_default_tags(monkeypatch, tmp_path: Path):
         path=path,
         mode="headings",
         tags=["charge-updates"],
+        manifest_path=manifest_path,
     )
     ingest_module._run_file_ingest(request)
 
     assert captured["tags"] == ["charge-updates", "prd", "product-docs"]
+    assert captured["manifest_path"] == manifest_path
 
 
 def test_load_memory_session_returns_memory_and_items(monkeypatch):

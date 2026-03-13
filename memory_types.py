@@ -355,6 +355,9 @@ class FileIngestRequest:
     path: Path
     mode: str
     tags: list[str]
+    manifest_path: Path = field(
+        default_factory=lambda: Path(__file__).resolve().with_name("projects.yaml")
+    )
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "FileIngestRequest":
@@ -364,6 +367,9 @@ class FileIngestRequest:
             path=Path(args.path).expanduser().resolve(),
             mode=args.mode,
             tags=normalize_tags(args.tags),
+            manifest_path=Path(
+                getattr(args, "manifest", Path(__file__).resolve().with_name("projects.yaml"))
+            ),
         )
 
 

@@ -100,7 +100,8 @@ def test_list_tools_schema_smoke():
 
     assert {
         "search_context", "store_memory", "list_memories", "get_memory", "delete_memory",
-        "ingest_repo", "ingest_file", "prune_memories", "init_project", "clear_memories",
+        "ingest_repo", "ingest_file", "prune_memories", "init_project",
+        "context_plan", "policy_run", "clear_memories",
     }.issubset(tool_map.keys())
     assert tool_map["search_context"].inputSchema["required"] == ["query"]
     assert tool_map["store_memory"].inputSchema["required"] == ["content"]
