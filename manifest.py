@@ -56,6 +56,7 @@ class RepoConfig:
     exclude: list[str]
     default_tags: list[str]
     default_active_project: str | None = None
+    chunking_by_extension: dict[str, str] | None = None
 
 
 _MANIFEST_INDEX_CACHE_LOCK = threading.Lock()
@@ -197,12 +198,23 @@ def resolve_repo_config(
     if not isinstance(default_active_project, str):
         default_active_project = None
 
+    # Per-extension chunking mode map (e.g. {".py": "docstrings", ".md": "headings"})
+    raw_ext_map = repo_config.get("chunking_by_extension")
+    chunking_by_extension: dict[str, str] | None = None
+    if isinstance(raw_ext_map, dict):
+        chunking_by_extension = {
+            (k if k.startswith(".") else f".{k}"): str(v)
+            for k, v in raw_ext_map.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+
     return RepoConfig(
         root=root,
         include=list(include),
         exclude=list(exclude),
         default_tags=default_tags,
         default_active_project=default_active_project,
+        chunking_by_extension=chunking_by_extension or None,
     )
 
 

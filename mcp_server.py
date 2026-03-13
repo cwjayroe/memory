@@ -16,11 +16,13 @@ from mcp.types import TextContent, Tool
 
 from memory_types import (
     DeleteMemoryRequest,
+    FindSimilarRequest,
     GetMemoryRequest,
     ListMemoriesRequest,
     SearchContextParsePolicy,
     SearchContextRequest,
     StoreMemoryRequest,
+    UpdateMemoryRequest,
 )
 from formatting import ResultFormatter
 from scoring import RerankerManager, ScoringEngine
@@ -81,10 +83,25 @@ async def _handle_search_context(arguments: dict[str, Any]) -> list[TextContent]
     if not request.query:
         return [TextContent(type="text", text="Query cannot be empty.")]
 
-    project_ids, scope_source, inference_candidates = _resolve_search_scope(
-        request,
-        config
-    )
+    # Handle search_all_scopes: enumerate all manifest projects
+    if request.search_all_scopes:
+        try:
+            from manifest import read_manifest as _read_manifest
+            _manifest = _read_manifest(Path(config.manifest_path))
+            _all_projects = list((_manifest.get("projects") or {}).keys())
+        except Exception:
+            _all_projects = []
+        if not _all_projects:
+            _all_projects = [DEFAULT_PROJECT_ID]
+        max_scopes = config.max_projects_per_query * 3
+        project_ids = _all_projects[:max_scopes]
+        scope_source = "all-scopes"
+        inference_candidates = []
+    else:
+        project_ids, scope_source, inference_candidates = _resolve_search_scope(
+            request,
+            config
+        )
     request = replace(request, project_ids=project_ids)
     cache_key = _build_search_cache_key(request, project_ids)
     if not request.debug:
@@ -150,8 +167,17 @@ async def _handle_store_memory(arguments: dict[str, Any]) -> list[TextContent]:
     )
     text = (
         f"Stored memory in project={request.project_id}. "
-        f"deleted_existing={deleted_count} new_ids={','.join(new_ids) if new_ids else 'n/a'}"
+        f"deleted_existing={deleted_count} new_ids={','.join(new_ids) if new_ids else 'n/a'} "
+        f"priority={request.priority}"
     )
+
+    # Optional tag suggestion
+    if bool(arguments.get("suggest_tags", False)):
+        from tagging import suggest_tags
+        suggestions = suggest_tags(request.content, max_suggestions=5)
+        if suggestions:
+            text += f"\nsuggested_tags={','.join(suggestions)}"
+
     return [TextContent(type="text", text=text)]
 
 
@@ -462,16 +488,34 @@ async def _handle_policy_run(arguments: dict[str, Any]) -> list[TextContent]:
     )
 
     if mode == "dry-run":
-        return [
-            TextContent(
-                type="text",
-                text=(
-                    f"Policy run for project={project} mode=dry-run "
-                    f"scanned={policy['scanned_count']} delete_candidates={policy['delete_count']} "
-                    f"reason_counts={policy['reasons']}"
-                ),
-            )
-        ]
+        verbose = bool(arguments.get("verbose", False))
+        summary = (
+            f"Policy run for project={project} mode=dry-run "
+            f"scanned={policy['scanned_count']} delete_candidates={policy['delete_count']} "
+            f"reason_counts={policy['reasons']}"
+        )
+        if verbose and policy["delete_ids"]:
+            items = mem_manager.get_all_items(project)
+            id_to_item = {(item.id or ""): item for item in items}
+            detail_lines = [summary, "\nDeletion candidates:"]
+            reason_ids = policy.get("reason_ids", {})
+            id_to_reason: dict[str, str] = {}
+            for reason_name, ids in reason_ids.items():
+                for mid in ids:
+                    id_to_reason.setdefault(mid, reason_name)
+            for mid in policy["delete_ids"]:
+                item = id_to_item.get(mid)
+                if item:
+                    md = item.metadata
+                    body_preview = " ".join(item.memory.split())[:120]
+                    reason = id_to_reason.get(mid, "unknown")
+                    detail_lines.append(
+                        f"  [{mid[:8]}] category={md.category or 'n/a'} repo={md.repo or 'n/a'} "
+                        f"updated_at={md.updated_at or 'n/a'} reason={reason}\n"
+                        f"    {body_preview}..."
+                    )
+            return [TextContent(type="text", text="\n".join(detail_lines))]
+        return [TextContent(type="text", text=summary)]
 
     deleted = 0
     for memory_id in policy["delete_ids"]:
@@ -528,18 +572,227 @@ async def _handle_clear_memories(arguments: dict[str, Any]) -> list[TextContent]
     return [TextContent(type="text", text=f"Cleared project={project}: deleted={deleted}")]
 
 
+async def _handle_update_memory(arguments: dict[str, Any]) -> list[TextContent]:
+    request = UpdateMemoryRequest.from_arguments(
+        arguments, default_project_id=DEFAULT_PROJECT_ID
+    )
+    if not request.memory_id:
+        return [TextContent(type="text", text="memory_id is required.")]
+    if not request.body and request.repo is None and request.category is None and request.tags is None and request.priority is None:
+        return [TextContent(type="text", text="Provide at least one field to update: body, repo, category, tags, priority.")]
+
+    found, message = mem_manager.update_memory(request=request)
+    return [TextContent(type="text", text=message)]
+
+
+async def _handle_get_stats(arguments: dict[str, Any]) -> list[TextContent]:
+    project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID)
+    repo = arguments.get("repo") or None
+
+    stats = mem_manager.get_stats(project_id, repo=repo)
+    return [TextContent(type="text", text=json.dumps(stats, indent=2, sort_keys=False))]
+
+
+async def _handle_health_check(arguments: dict[str, Any]) -> list[TextContent]:
+    from health import run_health_check
+    from constants import OLLAMA_BASE_URL, OLLAMA_MODEL
+
+    skip_slow = bool(arguments.get("skip_slow", False))
+    result = run_health_check(
+        ollama_base_url=OLLAMA_BASE_URL,
+        ollama_model=OLLAMA_MODEL,
+        reranker_model=config.reranker_model_name,
+        default_project_id=DEFAULT_PROJECT_ID,
+        skip_slow=skip_slow,
+    )
+    return [TextContent(type="text", text=json.dumps(result, indent=2, sort_keys=False))]
+
+
+async def _handle_find_similar(arguments: dict[str, Any]) -> list[TextContent]:
+    request = FindSimilarRequest.from_arguments(
+        arguments, default_project_id=DEFAULT_PROJECT_ID
+    )
+    if not request.memory_id and not request.text:
+        return [TextContent(type="text", text="Provide memory_id or text.")]
+
+    results = mem_manager.find_similar(request=request)
+    if not results:
+        return [TextContent(type="text", text="No similar memories found.")]
+
+    if request.response_format == "json":
+        return [TextContent(type="text", text=json.dumps({"count": len(results), "items": results}, indent=2))]
+
+    lines = [f"Found {len(results)} similar memories for project={request.project_id}:"]
+    for idx, item in enumerate(results, start=1):
+        score = item.get("score", "n/a")
+        score_text = f"{float(score):.4f}" if isinstance(score, (int, float)) else "n/a"
+        md = item.get("metadata", {})
+        body_preview = " ".join(str(item.get("memory", "")).split())[:300]
+        lines.append(
+            f"[{idx}] id={item.get('id')} score={score_text} "
+            f"category={md.get('category','general')} repo={md.get('repo','n/a')}\n"
+            f"{body_preview}"
+        )
+    return [TextContent(type="text", text="\n\n".join(lines))]
+
+
+async def _handle_bulk_store(arguments: dict[str, Any]) -> list[TextContent]:
+    project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID)
+    memories_raw = arguments.get("memories")
+    if not isinstance(memories_raw, list) or not memories_raw:
+        return [TextContent(type="text", text="memories must be a non-empty list of objects.")]
+
+    results = mem_manager.bulk_store(memories_raw, project_id=project_id)
+    ok_count = sum(1 for r in results if r.get("ok"))
+    err_count = len(results) - ok_count
+    summary = f"bulk_store project={project_id}: total={len(results)} ok={ok_count} errors={err_count}"
+    detail = json.dumps(results, indent=2)
+    return [TextContent(type="text", text=f"{summary}\n{detail}")]
+
+
+async def _handle_move_memory(arguments: dict[str, Any]) -> list[TextContent]:
+    memory_id = str(arguments.get("memory_id") or "").strip()
+    source_project = str(arguments.get("project_id") or DEFAULT_PROJECT_ID)
+    target_project = str(arguments.get("target_project_id") or "").strip()
+    if not memory_id:
+        return [TextContent(type="text", text="memory_id is required.")]
+    if not target_project:
+        return [TextContent(type="text", text="target_project_id is required.")]
+
+    item = mem_manager.get_memory_item(project_id=source_project, memory_id=memory_id)
+    if item is None:
+        return [TextContent(type="text", text=f"Memory not found: project={source_project} id={memory_id}")]
+
+    metadata = item.metadata.as_dict()
+    metadata["project_id"] = target_project
+    from helpers import utc_now
+    metadata["updated_at"] = utc_now()
+
+    target_mem = mem_manager.get_memory(target_project)
+    result = target_mem.add(item.memory, agent_id=target_project, metadata=metadata, infer=False)
+    from helpers import results_from_payload
+    stored = results_from_payload(result)
+    new_ids = [i.id for i in stored if isinstance(i.id, str)]
+
+    mem_manager.delete_memory(DeleteMemoryRequest(project_id=source_project, memory_id=memory_id, upsert_key=None))
+
+    return [TextContent(
+        type="text",
+        text=f"Moved memory {memory_id} from project={source_project} to project={target_project} new_ids={','.join(new_ids)}",
+    )]
+
+
+async def _handle_copy_scope(arguments: dict[str, Any]) -> list[TextContent]:
+    from_id = str(arguments.get("from_project_id") or "").strip()
+    to_id = str(arguments.get("to_project_id") or "").strip()
+    dry_run = bool(arguments.get("dry_run", False))
+
+    if not from_id or not to_id:
+        return [TextContent(type="text", text="from_project_id and to_project_id are required.")]
+    if from_id == to_id:
+        return [TextContent(type="text", text="from_project_id and to_project_id must differ.")]
+
+    all_items = mem_manager.get_all_items(from_id)
+    if dry_run:
+        return [TextContent(
+            type="text",
+            text=f"copy_scope dry-run: would copy {len(all_items)} memories from project={from_id} to project={to_id}",
+        )]
+
+    from helpers import utc_now, results_from_payload
+    copied = 0
+    errors = 0
+    target_mem = mem_manager.get_memory(to_id)
+    for raw in all_items:
+        from helpers import _coerce_memory_item
+        item = _coerce_memory_item(raw)
+        metadata = item.metadata.as_dict()
+        metadata["project_id"] = to_id
+        metadata["updated_at"] = utc_now()
+        try:
+            target_mem.add(item.memory, agent_id=to_id, metadata=metadata, infer=False)
+            copied += 1
+        except Exception:
+            errors += 1
+
+    return [TextContent(
+        type="text",
+        text=f"copy_scope from={from_id} to={to_id}: copied={copied} errors={errors}",
+    )]
+
+
+async def _handle_export_scope(arguments: dict[str, Any]) -> list[TextContent]:
+    project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID)
+    fmt = str(arguments.get("format") or "json").lower()
+
+    all_items = mem_manager.get_all_items(project_id)
+    lines: list[str] = []
+    for raw in all_items:
+        from helpers import _coerce_memory_item
+        item = _coerce_memory_item(raw)
+        lines.append(json.dumps(item.as_dict(), ensure_ascii=False))
+
+    if fmt == "ndjson":
+        payload = "\n".join(lines)
+    else:
+        import json as _json
+        payload = _json.dumps([json.loads(line) for line in lines], indent=2)
+
+    return [TextContent(type="text", text=f"Exported {len(lines)} memories from project={project_id}:\n{payload}")]
+
+
+async def _handle_summarize_scope(arguments: dict[str, Any]) -> list[TextContent]:
+    from summarizer import generate_scope_summary
+    from constants import OLLAMA_BASE_URL, OLLAMA_MODEL
+
+    project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID)
+    repo = arguments.get("repo") or None
+    category = arguments.get("category") or None
+    max_tokens = max(100, min(int(arguments.get("max_tokens", 800)), 2000))
+
+    all_items = mem_manager.get_all_items(project_id)
+    summary = generate_scope_summary(
+        project_id=project_id,
+        items=all_items,
+        repo=repo,
+        category=category,
+        max_tokens=max_tokens,
+        ollama_base_url=OLLAMA_BASE_URL,
+        ollama_model=OLLAMA_MODEL,
+    )
+    return [TextContent(type="text", text=f"Summary for project={project_id}:\n\n{summary}")]
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "search_context":
         return await _handle_search_context(arguments)
     elif name == "store_memory":
         return await _handle_store_memory(arguments)
+    elif name == "update_memory":
+        return await _handle_update_memory(arguments)
     elif name == "list_memories":
         return await _handle_list_memories(arguments)
     elif name == "get_memory":
         return await _handle_get_memory(arguments)
     elif name == "delete_memory":
         return await _handle_delete_memory(arguments)
+    elif name == "find_similar":
+        return await _handle_find_similar(arguments)
+    elif name == "bulk_store":
+        return await _handle_bulk_store(arguments)
+    elif name == "move_memory":
+        return await _handle_move_memory(arguments)
+    elif name == "copy_scope":
+        return await _handle_copy_scope(arguments)
+    elif name == "export_scope":
+        return await _handle_export_scope(arguments)
+    elif name == "get_stats":
+        return await _handle_get_stats(arguments)
+    elif name == "health_check":
+        return await _handle_health_check(arguments)
+    elif name == "summarize_scope":
+        return await _handle_summarize_scope(arguments)
     elif name == "ingest_repo":
         return await _handle_ingest_repo(arguments)
     elif name == "ingest_file":
@@ -612,6 +865,24 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "default": 420,
                     },
+                    "after_date": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime — only return memories updated after this date",
+                    },
+                    "before_date": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime — only return memories updated before this date",
+                    },
+                    "highlight": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Wrap matching query tokens in **bold** in excerpt text",
+                    },
+                    "search_all_scopes": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Search across all manifest scopes (ignores project_id/project_ids)",
+                    },
                 },
                 "required": ["query"],
             },
@@ -636,15 +907,49 @@ async def list_tools() -> list[Tool]:
                     "tags": {"type": ["array", "string"], "items": {"type": "string"}},
                     "upsert_key": {"type": "string"},
                     "fingerprint": {"type": "string"},
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "normal", "low"],
+                        "default": "normal",
+                        "description": "Importance weight used during ranking. high=+20% boost, low=-10% penalty.",
+                    },
+                    "suggest_tags": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Return suggested tags extracted from the body text",
+                    },
                 },
                 "required": ["content"],
+            },
+        ),
+        Tool(
+            name="update_memory",
+            description=(
+                "Atomically update an existing memory's body and/or metadata. "
+                "Patch semantics: only fields you supply are changed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "body": {"type": "string", "description": "New body text (replaces existing)"},
+                    "repo": {"type": "string"},
+                    "source_path": {"type": "string"},
+                    "source_kind": {"type": "string"},
+                    "category": {"type": "string"},
+                    "module": {"type": "string"},
+                    "tags": {"type": ["array", "string"], "items": {"type": "string"}},
+                    "priority": {"type": "string", "enum": ["high", "normal", "low"]},
+                },
+                "required": ["memory_id"],
             },
         ),
         Tool(
             name="list_memories",
             description=(
                 "List stored memories for a selected scope with optional project_id/repo/"
-                "category/tag/path filters and pagination."
+                "category/tag/path filters, pagination, and sort control."
             ),
             inputSchema={
                 "type": "object",
@@ -656,6 +961,16 @@ async def list_tools() -> list[Tool]:
                     "path_prefix": {"type": "string"},
                     "offset": {"type": "integer", "default": 0},
                     "limit": {"type": "integer", "default": 20},
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["updated_at", "created_at", "category", "repo"],
+                        "default": "updated_at",
+                    },
+                    "sort_order": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "default": "desc",
+                    },
                     "response_format": {
                         "type": "string",
                         "enum": ["text", "json"],
@@ -836,6 +1151,11 @@ async def list_tools() -> list[Tool]:
                     "summary_keep": {"type": "integer", "default": 5},
                     "repo": {"type": "string"},
                     "path_prefix": {"type": "string"},
+                    "verbose": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "In dry-run mode: show per-memory details (excerpt, reason, age) for each deletion candidate",
+                    },
                 },
                 "required": ["project"],
             },
@@ -853,6 +1173,159 @@ async def list_tools() -> list[Tool]:
                     "confirm": {"type": "boolean", "default": False},
                 },
                 "required": ["project"],
+            },
+        ),
+        Tool(
+            name="find_similar",
+            description=(
+                "Find memories semantically similar to a given text or an existing memory ID. "
+                "Useful for dedup review and related-context discovery."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "memory_id": {"type": "string", "description": "ID of seed memory (search from its body)"},
+                    "text": {"type": "string", "description": "Raw text to find similar memories for"},
+                    "limit": {"type": "integer", "default": 10},
+                    "threshold": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum similarity score (0.0–1.0)",
+                    },
+                    "response_format": {"type": "string", "enum": ["text", "json"], "default": "text"},
+                },
+            },
+        ),
+        Tool(
+            name="bulk_store",
+            description=(
+                "Store multiple memories in a single call. "
+                "Returns per-item success/error results."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "memories": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string"},
+                                "repo": {"type": "string"},
+                                "source_path": {"type": "string"},
+                                "source_kind": {"type": "string"},
+                                "category": {"type": "string"},
+                                "module": {"type": "string"},
+                                "tags": {"type": "array", "items": {"type": "string"}},
+                                "upsert_key": {"type": "string"},
+                                "fingerprint": {"type": "string"},
+                                "priority": {"type": "string", "enum": ["high", "normal", "low"]},
+                            },
+                            "required": ["content"],
+                        },
+                        "description": "List of memory objects to store",
+                    },
+                },
+                "required": ["memories"],
+            },
+        ),
+        Tool(
+            name="get_stats",
+            description=(
+                "Return aggregate statistics for a scope: total count, breakdown by category/"
+                "repo/source_kind/priority, oldest/newest timestamps, estimated token coverage."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "repo": {"type": "string", "description": "Optional repo filter"},
+                },
+            },
+        ),
+        Tool(
+            name="health_check",
+            description=(
+                "Check connectivity and readiness of all system components: "
+                "Ollama, Chroma, embedding model, and reranker."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "skip_slow": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Skip slow model-load checks (embedding + reranker)",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="move_memory",
+            description=(
+                "Move a single memory from one scope to another. "
+                "Re-stores with updated project_id and deletes from source."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "project_id": {"type": "string", "description": "Source scope"},
+                    "target_project_id": {"type": "string", "description": "Destination scope"},
+                },
+                "required": ["memory_id", "target_project_id"],
+            },
+        ),
+        Tool(
+            name="copy_scope",
+            description=(
+                "Copy all memories from one scope to another. "
+                "Use dry_run=true to preview without writing."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "from_project_id": {"type": "string"},
+                    "to_project_id": {"type": "string"},
+                    "dry_run": {"type": "boolean", "default": False},
+                },
+                "required": ["from_project_id", "to_project_id"],
+            },
+        ),
+        Tool(
+            name="export_scope",
+            description=(
+                "Export all memories for a scope as a JSON array or newline-delimited JSON. "
+                "Useful for backup or cross-machine migration."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "format": {
+                        "type": "string",
+                        "enum": ["json", "ndjson"],
+                        "default": "json",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="summarize_scope",
+            description=(
+                "Generate a prose summary of what a scope contains, "
+                "grouped by category, using the configured LLM."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "repo": {"type": "string", "description": "Filter summary to a specific repo"},
+                    "category": {"type": "string", "description": "Filter summary to a specific category"},
+                    "max_tokens": {"type": "integer", "default": 800},
+                },
             },
         ),
     ]
