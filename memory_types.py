@@ -7,6 +7,9 @@ from typing import Any
 from utils import safe_int, optional_str, as_bool, normalize_tags, normalize_strings, normalize_project_ids , normalize_response_format, normalize_excerpt_chars # type: ignore
 from constants import DEFAULT_EXCERPT_CHARS 
 
+VALID_PRIORITIES = frozenset({"high", "normal", "low"})
+
+
 @dataclass
 class MemoryMetadata:
     project_id: str | None = None
@@ -19,6 +22,7 @@ class MemoryMetadata:
     tags: list[str] = field(default_factory=list)
     fingerprint: str | None = None
     upsert_key: str | None = None
+    priority: str = "normal"
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -35,8 +39,11 @@ class MemoryMetadata:
             "tags",
             "fingerprint",
             "upsert_key",
+            "priority",
         }
         extra = {key: item for key, item in raw.items() if key not in known_keys}
+        raw_priority = raw.get("priority")
+        priority = raw_priority if isinstance(raw_priority, str) and raw_priority in VALID_PRIORITIES else "normal"
         return cls(
             project_id=raw.get("project_id") if isinstance(raw.get("project_id"), str) else None,
             repo=raw.get("repo") if isinstance(raw.get("repo"), str) else None,
@@ -48,6 +55,7 @@ class MemoryMetadata:
             tags=normalize_tags(raw.get("tags")),
             fingerprint=raw.get("fingerprint") if isinstance(raw.get("fingerprint"), str) else None,
             upsert_key=raw.get("upsert_key") if isinstance(raw.get("upsert_key"), str) else None,
+            priority=priority,
             extra=extra,
         )
 
@@ -73,6 +81,7 @@ class MemoryMetadata:
             value["fingerprint"] = self.fingerprint
         if self.upsert_key is not None:
             value["upsert_key"] = self.upsert_key
+        value["priority"] = self.priority
         return value
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -96,6 +105,8 @@ class MemoryMetadata:
             return self.fingerprint if self.fingerprint is not None else default
         if key == "upsert_key":
             return self.upsert_key if self.upsert_key is not None else default
+        if key == "priority":
+            return self.priority
         return self.extra.get(key, default)
 
 
@@ -171,6 +182,10 @@ class SearchContextRequest:
     response_format: str
     include_full_text: bool
     excerpt_chars: int
+    after_date: str | None = None
+    before_date: str | None = None
+    highlight: bool = False
+    search_all_scopes: bool = False
 
     @classmethod
     def from_arguments(
@@ -223,6 +238,10 @@ class SearchContextRequest:
             response_format=normalize_response_format(arguments.get("response_format")),
             include_full_text=as_bool(arguments.get("include_full_text", False)),
             excerpt_chars=normalize_excerpt_chars(arguments.get("excerpt_chars", DEFAULT_EXCERPT_CHARS)),
+            after_date=optional_str(arguments.get("after_date")),
+            before_date=optional_str(arguments.get("before_date")),
+            highlight=as_bool(arguments.get("highlight", False)),
+            search_all_scopes=as_bool(arguments.get("search_all_scopes", False)),
         )
 
 
@@ -238,11 +257,14 @@ class StoreMemoryRequest:
     tags: list[str]
     upsert_key: str | None
     fingerprint: str | None
+    priority: str = "normal"
 
     @classmethod
     def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "StoreMemoryRequest":
         source_kind = optional_str(arguments.get("source_kind")) or "summary"
         category = optional_str(arguments.get("category")) or source_kind
+        raw_priority = optional_str(arguments.get("priority"))
+        priority = raw_priority if raw_priority in VALID_PRIORITIES else "normal"
         return cls(
             project_id=optional_str(arguments.get("project_id")) or default_project_id,
             content=str(arguments["content"]).strip(),
@@ -254,7 +276,12 @@ class StoreMemoryRequest:
             tags=normalize_tags(arguments.get("tags")),
             upsert_key=optional_str(arguments.get("upsert_key")),
             fingerprint=optional_str(arguments.get("fingerprint")),
+            priority=priority,
         )
+
+
+VALID_SORT_BY = frozenset({"updated_at", "created_at", "category", "repo"})
+VALID_SORT_ORDER = frozenset({"asc", "desc"})
 
 
 @dataclass(frozen=True)
@@ -269,6 +296,8 @@ class ListMemoriesRequest:
     response_format: str
     include_full_text: bool
     excerpt_chars: int
+    sort_by: str = "updated_at"
+    sort_order: str = "desc"
 
     @classmethod
     def from_arguments(
@@ -279,6 +308,10 @@ class ListMemoriesRequest:
         default_limit: int,
         max_limit: int,
     ) -> "ListMemoriesRequest":
+        raw_sort_by = optional_str(arguments.get("sort_by")) or "updated_at"
+        sort_by = raw_sort_by if raw_sort_by in VALID_SORT_BY else "updated_at"
+        raw_sort_order = optional_str(arguments.get("sort_order")) or "desc"
+        sort_order = raw_sort_order if raw_sort_order in VALID_SORT_ORDER else "desc"
         return cls(
             project_id=optional_str(arguments.get("project_id")) or default_project_id,
             repo=optional_str(arguments.get("repo")),
@@ -290,6 +323,8 @@ class ListMemoriesRequest:
             response_format=normalize_response_format(arguments.get("response_format")),
             include_full_text=as_bool(arguments.get("include_full_text", False)),
             excerpt_chars=normalize_excerpt_chars(arguments.get("excerpt_chars", DEFAULT_EXCERPT_CHARS)),
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
 
@@ -320,6 +355,67 @@ class DeleteMemoryRequest:
             project_id=optional_str(arguments.get("project_id")) or default_project_id,
             memory_id=optional_str(arguments.get("memory_id")),
             upsert_key=optional_str(arguments.get("upsert_key")),
+        )
+
+
+@dataclass(frozen=True)
+class UpdateMemoryRequest:
+    project_id: str
+    memory_id: str
+    body: str | None
+    repo: str | None
+    source_path: str | None
+    source_kind: str | None
+    category: str | None
+    module: str | None
+    tags: list[str] | None
+    priority: str | None
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "UpdateMemoryRequest":
+        raw_priority = optional_str(arguments.get("priority"))
+        priority = raw_priority if raw_priority in VALID_PRIORITIES else None
+        tags_raw = arguments.get("tags")
+        tags = normalize_tags(tags_raw) if tags_raw is not None else None
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            memory_id=str(arguments.get("memory_id") or "").strip(),
+            body=optional_str(arguments.get("body")),
+            repo=optional_str(arguments.get("repo")),
+            source_path=optional_str(arguments.get("source_path")),
+            source_kind=optional_str(arguments.get("source_kind")),
+            category=optional_str(arguments.get("category")),
+            module=optional_str(arguments.get("module")),
+            tags=tags,
+            priority=priority,
+        )
+
+
+@dataclass(frozen=True)
+class FindSimilarRequest:
+    project_id: str
+    memory_id: str | None
+    text: str | None
+    threshold: float
+    limit: int
+    response_format: str
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "FindSimilarRequest":
+        threshold_raw = arguments.get("threshold", 0.0)
+        try:
+            threshold = float(threshold_raw)
+        except (TypeError, ValueError):
+            threshold = 0.0
+        threshold = max(0.0, min(threshold, 1.0))
+        limit = max(1, min(safe_int(arguments.get("limit", 10), 10), 50))
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            memory_id=optional_str(arguments.get("memory_id")),
+            text=optional_str(arguments.get("text")),
+            threshold=threshold,
+            limit=limit,
+            response_format=normalize_response_format(arguments.get("response_format")),
         )
 
 

@@ -117,6 +117,7 @@ def ingest_file(
     mode: str,
     tags: list[str],
     mem_manager: "MemoryManager | None" = None,
+    extension_mode_map: dict[str, str] | None = None,
 ) -> tuple[int, int]:
     mm = mem_manager or _get_mem_manager()
     source_path = str(path.resolve())
@@ -135,7 +136,7 @@ def ingest_file(
             deleted += 1
             items.remove(item)
 
-    chunks = chunk_file(path, mode)
+    chunks = chunk_file(path, mode, extension_mode_map=extension_mode_map)
     stored = 0
     for index, chunk in enumerate(chunks):
         upsert_key = "::".join([project_id, repo or "global", source_path or "adhoc", chunk.source_kind, str(index)])
@@ -263,6 +264,7 @@ def build_policy_actions(
         "delete_count": len(final_ids),
         "scanned_count": len(filtered),
         "reasons": {key: len(values) for key, values in reasons.items()},
+        "reason_ids": {key: values for key, values in reasons.items()},
     }
 
 
@@ -283,7 +285,7 @@ def _load_memory_session(project_id: str) -> tuple[Memory, list[dict[str, Any]]]
 # ---------------------------------------------------------------------------
 
 
-def _run_repo_ingest(request: RepoIngestRequest) -> None:
+def _run_repo_ingest(request: RepoIngestRequest, *, diff: bool = False) -> None:
     manifest = read_manifest(request.manifest_path)
     config = resolve_repo_config(
         manifest=manifest,
@@ -299,6 +301,7 @@ def _run_repo_ingest(request: RepoIngestRequest) -> None:
     _, items = _load_memory_session(request.project)
     files = collect_files(config.root, config.include, config.exclude)
     tags = sorted(set(config.default_tags + request.tags))
+    ext_map = config.chunking_by_extension
 
     LOGGER.info("→ Project: %s", request.project)
     LOGGER.info("→ Repo: %s", request.repo)
@@ -316,18 +319,25 @@ def _run_repo_ingest(request: RepoIngestRequest) -> None:
             path=file_path,
             mode=request.mode,
             tags=tags,
+            extension_mode_map=ext_map,
         )
         total_deleted += deleted
         total_stored += stored
-        LOGGER.info("  ✓ %s: deleted=%d stored=%d", file_path, deleted, stored)
+        if diff:
+            print(f"  {file_path.name}: -deleted={deleted} +stored={stored}")
+        else:
+            LOGGER.info("  ✓ %s: deleted=%d stored=%d", file_path, deleted, stored)
+    if diff:
+        print(f"Repo diff: files={len(files)} total_deleted={total_deleted} total_stored={total_stored}")
     LOGGER.info("Done. deleted=%d stored=%d", total_deleted, total_stored)
 
 
-def _run_file_ingest(request: FileIngestRequest) -> None:
+def _run_file_ingest(request: FileIngestRequest, *, diff: bool = False) -> None:
     if not request.path.exists():
         raise FileNotFoundError(f"File not found: {request.path}")
 
     tags = list(request.tags)
+    ext_map: dict[str, str] | None = None
     try:
         manifest = read_manifest(request.manifest_path)
         repo_config = resolve_repo_config(
@@ -339,6 +349,7 @@ def _run_file_ingest(request: FileIngestRequest) -> None:
             exclude_override=None,
         )
         tags = sorted(set(repo_config.default_tags + request.tags))
+        ext_map = repo_config.chunking_by_extension
     except Exception:
         LOGGER.warning(
             "Falling back to explicit tags only for file ingest project=%s repo=%s",
@@ -355,7 +366,10 @@ def _run_file_ingest(request: FileIngestRequest) -> None:
         path=request.path,
         mode=request.mode,
         tags=tags,
+        extension_mode_map=ext_map,
     )
+    if diff:
+        print(f"File diff {request.path.name}: -deleted={deleted} +stored={stored}")
     LOGGER.info("Done. %s deleted=%d stored=%d", request.path, deleted, stored)
 
 
@@ -549,7 +563,7 @@ def _run_context_plan(request: ContextPlanRequest) -> None:
     LOGGER.info((json.dumps(plan, indent=2)))
 
 
-def _run_policy(request: PolicyRunRequest) -> None:
+def _run_policy(request: PolicyRunRequest, *, verbose: bool = False) -> None:
     _memory, items = _load_memory_session(request.project)
     policy = build_policy_actions(
         items=items,
@@ -565,7 +579,31 @@ def _run_policy(request: PolicyRunRequest) -> None:
     LOGGER.info("reason_counts=%s", policy["reasons"])
     if request.mode == "dry-run":
         LOGGER.info("No deletions applied (dry-run).")
-        if policy["delete_ids"]:
+        if verbose and policy["delete_ids"]:
+            # Build a lookup of id -> item for verbose output
+            id_to_item = {str(item.get("id", "")): item for item in items if item.get("id")}
+            print(f"\nDry-run candidates ({len(policy['delete_ids'])} total):")
+            for mid in policy["delete_ids"]:
+                raw = id_to_item.get(mid, {})
+                md = memory_metadata(raw)
+                category = md.get("category", "unknown")
+                repo = md.get("repo", "n/a")
+                updated_at = md.get("updated_at", "n/a")
+                body_preview = " ".join(str(raw.get("memory", "")).split())[:120]
+                # Determine deletion reason
+                reason = "unknown"
+                for reason_name, reason_ids in [
+                    ("summary_over_limit", policy.get("reason_ids", {}).get("summary_over_limit", [])),
+                    ("code_doc_stale", policy.get("reason_ids", {}).get("code_doc_stale", [])),
+                    ("code_doc_duplicate_fingerprint", policy.get("reason_ids", {}).get("code_doc_duplicate_fingerprint", [])),
+                ]:
+                    if mid in reason_ids:
+                        reason = reason_name
+                        break
+                print(f"  [{mid[:8]}] category={category} repo={repo} updated_at={updated_at} reason={reason}")
+                if body_preview:
+                    print(f"    {body_preview}...")
+        elif policy["delete_ids"]:
             preview = ",".join(policy["delete_ids"][:20])
             LOGGER.info("candidate_ids_preview=%s", preview)
         return
@@ -577,17 +615,95 @@ def _run_policy(request: PolicyRunRequest) -> None:
     LOGGER.info("Applied policy deletions: %d", deleted)
 
 
+def _run_export(project: str, output_path: str | None) -> None:
+    """Export all memories for a project to newline-delimited JSON."""
+    import sys
+    mm = _get_mem_manager()
+    items = mm.get_all_items(project)
+    lines: list[str] = []
+    for raw in items:
+        if hasattr(raw, "as_dict"):
+            item_dict = raw.as_dict()
+        else:
+            item_dict = dict(raw) if isinstance(raw, dict) else {}
+        lines.append(json.dumps(item_dict, ensure_ascii=False))
+    output = "\n".join(lines)
+    if output_path:
+        Path(output_path).write_text(output, encoding="utf-8")
+        print(f"Exported {len(lines)} memories to {output_path}")
+    else:
+        sys.stdout.write(output)
+        if lines:
+            sys.stdout.write("\n")
+
+
+def _run_import(project: str, input_path: str, upsert: bool = True) -> None:
+    """Import memories from a newline-delimited JSON file into a project scope."""
+    mm = _get_mem_manager()
+    lines = Path(input_path).read_text(encoding="utf-8").splitlines()
+    items = mm.get_all_items(project)
+    imported = 0
+    errors = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            raw = json.loads(line)
+            memory_text = str(raw.get("memory") or raw.get("content") or "").strip()
+            if not memory_text:
+                continue
+            md = raw.get("metadata") or {}
+            source_kind = str(md.get("source_kind") or "summary")
+            category = str(md.get("category") or source_kind)
+            raw_priority = md.get("priority", "normal")
+            from memory_types import VALID_PRIORITIES  # type: ignore
+            priority = raw_priority if isinstance(raw_priority, str) and raw_priority in VALID_PRIORITIES else "normal"
+            req = StoreMemoryRequest(
+                project_id=project,
+                content=memory_text,
+                repo=md.get("repo") or None,
+                source_path=md.get("source_path") or None,
+                source_kind=source_kind,
+                category=category,
+                module=md.get("module") or None,
+                tags=normalize_tags(md.get("tags")),
+                upsert_key=md.get("upsert_key") or None,
+                fingerprint=md.get("fingerprint") or None,
+                priority=priority,
+            )
+            mm.store_memory(req, pre_fetched_items=[item.as_dict() if hasattr(item, "as_dict") else item for item in items])
+            imported += 1
+        except Exception as exc:
+            LOGGER.warning("Failed to import memory line: %s", exc)
+            errors += 1
+    print(f"Imported {imported} memories into project={project} (errors={errors})")
+
+
+def _run_watch(project: str, repo: str, root: str, include: list[str], exclude: list[str], debounce: float) -> None:
+    """Watch a directory and auto-ingest changed files."""
+    from watcher import watch_repo  # type: ignore
+    watch_repo(
+        root=Path(root).expanduser().resolve(),
+        project_id=project,
+        repo=repo,
+        include=include,
+        exclude=exclude,
+        debounce_seconds=debounce,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Argparse command dispatchers
 # ---------------------------------------------------------------------------
 
 
 def cmd_repo(args: argparse.Namespace) -> None:
-    _run_repo_ingest(RepoIngestRequest.from_namespace(args))
+    _run_repo_ingest(RepoIngestRequest.from_namespace(args), diff=getattr(args, "diff", False))
 
 
 def cmd_file(args: argparse.Namespace) -> None:
-    _run_file_ingest(FileIngestRequest.from_namespace(args))
+    _run_file_ingest(FileIngestRequest.from_namespace(args), diff=getattr(args, "diff", False))
 
 
 def cmd_note(args: argparse.Namespace) -> None:
@@ -615,7 +731,28 @@ def cmd_context_plan(args: argparse.Namespace) -> None:
 
 
 def cmd_policy_run(args: argparse.Namespace) -> None:
-    _run_policy(PolicyRunRequest.from_namespace(args))
+    _run_policy(PolicyRunRequest.from_namespace(args), verbose=getattr(args, "verbose", False))
+
+
+def cmd_export(args: argparse.Namespace) -> None:
+    _run_export(args.project, getattr(args, "output", None))
+
+
+def cmd_import(args: argparse.Namespace) -> None:
+    _run_import(args.project, args.file, upsert=getattr(args, "upsert", True))
+
+
+def cmd_watch(args: argparse.Namespace) -> None:
+    include = normalize_strings(getattr(args, "include", None) or "") or list(DEFAULT_INCLUDE)
+    exclude = normalize_strings(getattr(args, "exclude", None) or "") or list(DEFAULT_EXCLUDE)
+    _run_watch(
+        project=args.project,
+        repo=args.repo,
+        root=args.root,
+        include=include,
+        exclude=exclude,
+        debounce=float(getattr(args, "debounce", 3.0)),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -632,6 +769,7 @@ def build_parser() -> argparse.ArgumentParser:
     repo_cmd.add_argument("--exclude", action="append")
     repo_cmd.add_argument("--tags")
     repo_cmd.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+    repo_cmd.add_argument("--diff", action="store_true", help="Print per-file chunk diff summary")
     repo_cmd.set_defaults(func=cmd_repo)
 
     file_cmd = sub.add_parser("file", help="Ingest a single file into a selected scope")
@@ -641,6 +779,7 @@ def build_parser() -> argparse.ArgumentParser:
     file_cmd.add_argument("--mode", choices=["docstrings", "headings", "code-chunks", "mixed"], default="mixed")
     file_cmd.add_argument("--tags")
     file_cmd.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+    file_cmd.add_argument("--diff", action="store_true", help="Print chunk diff summary")
     file_cmd.set_defaults(func=cmd_file)
 
     note_cmd = sub.add_parser("note", help="Store a decision or note in a selected scope")
@@ -697,7 +836,28 @@ def build_parser() -> argparse.ArgumentParser:
     policy_cmd.add_argument("--summary-keep", type=int, default=5)
     policy_cmd.add_argument("--repo")
     policy_cmd.add_argument("--path-prefix")
+    policy_cmd.add_argument("--verbose", action="store_true", help="Show per-memory deletion details in dry-run mode")
     policy_cmd.set_defaults(func=cmd_policy_run)
+
+    export_cmd = sub.add_parser("export", help="Export all memories for a scope to newline-delimited JSON")
+    export_cmd.add_argument("--project", required=True)
+    export_cmd.add_argument("--output", help="Output file path (defaults to stdout)")
+    export_cmd.set_defaults(func=cmd_export)
+
+    import_cmd = sub.add_parser("import", help="Import memories from a newline-delimited JSON file into a scope")
+    import_cmd.add_argument("--project", required=True)
+    import_cmd.add_argument("--file", required=True, help="Path to the NDJSON file to import")
+    import_cmd.add_argument("--upsert", action="store_true", default=True, help="Upsert memories (default: true)")
+    import_cmd.set_defaults(func=cmd_import)
+
+    watch_cmd = sub.add_parser("watch", help="Watch a directory and auto-ingest changed files")
+    watch_cmd.add_argument("--project", required=True)
+    watch_cmd.add_argument("--repo", required=True)
+    watch_cmd.add_argument("--root", required=True, help="Root directory to watch")
+    watch_cmd.add_argument("--include", help="Comma-separated glob patterns to include")
+    watch_cmd.add_argument("--exclude", help="Comma-separated glob patterns to exclude")
+    watch_cmd.add_argument("--debounce", type=float, default=3.0, help="Debounce delay in seconds (default: 3)")
+    watch_cmd.set_defaults(func=cmd_watch)
 
     return parser
 
@@ -712,6 +872,9 @@ COMMAND_HANDLERS = {
     "project-init": cmd_project_init,
     "context-plan": cmd_context_plan,
     "policy-run": cmd_policy_run,
+    "export": cmd_export,
+    "import": cmd_import,
+    "watch": cmd_watch,
 }
 
 

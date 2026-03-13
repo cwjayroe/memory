@@ -31,6 +31,8 @@ try:
         DeleteMemoryRequest,
         StoreMemoryRequest,
         SearchContextRequest,
+        UpdateMemoryRequest,
+        FindSimilarRequest,
         MemoryItem,
     )
     from .helpers import (
@@ -52,7 +54,7 @@ except ImportError:  # pragma: no cover - direct script/import fallback
         DEFAULT_PROJECT_ID,
         GET_ALL_LIMIT,
     )
-    from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, MemoryItem  # type: ignore
+    from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem  # type: ignore
     from server_config import ServerConfig  # type: ignore
     from helpers import _is_transient_memory_init_error, _find_ids, _coerce_memory_item, _matches_filters, get_all_items, parse_datetime, utc_now, results_from_payload, build_mem0_config  # type: ignore
 
@@ -162,6 +164,7 @@ class MemoryManager:
             "source_kind": request.source_kind,
             "updated_at": utc_now(),
             "fingerprint": fingerprint,
+            "priority": getattr(request, "priority", "normal"),
         }
         if request.tags:
             metadata["tags"] = request.tags
@@ -221,11 +224,21 @@ class MemoryManager:
                     continue
             filtered.append(item)
 
+        sort_by = getattr(request, "sort_by", "updated_at")
+        sort_order = getattr(request, "sort_order", "desc")
         epoch_utc = datetime.fromtimestamp(0, tz=timezone.utc)
-        filtered.sort(
-            key=lambda item: parse_datetime(item.metadata.updated_at) or epoch_utc,
-            reverse=True,
-        )
+
+        def sort_key(item: MemoryItem) -> Any:
+            md = item.metadata
+            if sort_by in ("updated_at", "created_at"):
+                return parse_datetime(md.updated_at) or epoch_utc
+            if sort_by == "category":
+                return md.category or ""
+            if sort_by == "repo":
+                return md.repo or ""
+            return parse_datetime(md.updated_at) or epoch_utc
+
+        filtered.sort(key=sort_key, reverse=(sort_order != "asc"))
         page = filtered[request.offset : request.offset + request.limit]
         return page, len(filtered)
 
@@ -247,6 +260,183 @@ class MemoryManager:
             if item.id == memory_id:
                 return item
         return None
+
+    def update_memory(
+        self,
+        request: "UpdateMemoryRequest",
+    ) -> tuple[bool, str]:
+        """Patch an existing memory's body and/or metadata. Returns (found, message)."""
+        from memory_types import VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
+        item = self.get_memory_item(project_id=request.project_id, memory_id=request.memory_id)
+        if item is None:
+            return False, f"Memory not found: project={request.project_id} id={request.memory_id}"
+
+        memory = self.get_memory(request.project_id)
+
+        # Build updated body
+        new_body = request.body.strip() if request.body and request.body.strip() else item.memory
+
+        # Build patched metadata (merge over existing)
+        existing_md = item.metadata.as_dict()
+        if request.repo is not None:
+            existing_md["repo"] = request.repo
+        if request.source_path is not None:
+            existing_md["source_path"] = request.source_path
+        if request.source_kind is not None:
+            existing_md["source_kind"] = request.source_kind
+        if request.category is not None:
+            existing_md["category"] = request.category
+        if request.module is not None:
+            existing_md["module"] = request.module
+        if request.tags is not None:
+            existing_md["tags"] = request.tags
+        if request.priority is not None:
+            existing_md["priority"] = request.priority
+        existing_md["updated_at"] = utc_now()
+
+        # Delete old, re-add with new content and metadata
+        memory.delete(request.memory_id)
+        result = memory.add(new_body, agent_id=request.project_id, metadata=existing_md, infer=False)
+        from helpers import results_from_payload  # type: ignore  # noqa: PLC0415
+        stored = results_from_payload(result)
+        new_ids = [i.id for i in stored if isinstance(i.id, str)]
+        return True, f"Updated memory project={request.project_id} new_id={','.join(new_ids) if new_ids else 'n/a'}"
+
+    def get_stats(
+        self,
+        project_id: str,
+        *,
+        repo: str | None = None,
+    ) -> dict[str, Any]:
+        """Return aggregate statistics for a scope without touching embeddings."""
+        all_items = self.get_all_items(project_id)
+
+        category_counts: dict[str, int] = {}
+        repo_counts: dict[str, int] = {}
+        source_kind_counts: dict[str, int] = {}
+        priority_counts: dict[str, int] = {"high": 0, "normal": 0, "low": 0}
+        oldest: str | None = None
+        newest: str | None = None
+        total_chars = 0
+        fingerprints: dict[str, int] = {}
+
+        for raw_item in all_items:
+            item = _coerce_memory_item(raw_item)
+            md = item.metadata
+            if repo and md.repo != repo:
+                continue
+            cat = md.category or "general"
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+            r = md.repo or "unknown"
+            repo_counts[r] = repo_counts.get(r, 0) + 1
+            sk = md.source_kind or "summary"
+            source_kind_counts[sk] = source_kind_counts.get(sk, 0) + 1
+            p = md.priority if md.priority in {"high", "normal", "low"} else "normal"
+            priority_counts[p] = priority_counts.get(p, 0) + 1
+            total_chars += len(item.memory)
+            fp = md.fingerprint
+            if fp:
+                fingerprints[fp] = fingerprints.get(fp, 0) + 1
+            ts = md.updated_at
+            if ts:
+                if oldest is None or ts < oldest:
+                    oldest = ts
+                if newest is None or ts > newest:
+                    newest = ts
+
+        total = sum(category_counts.values())
+        duplicate_fingerprints = sum(1 for count in fingerprints.values() if count > 1)
+        estimated_tokens = int(total_chars / 4)
+
+        return {
+            "project_id": project_id,
+            "repo_filter": repo,
+            "total_memories": total,
+            "estimated_tokens": estimated_tokens,
+            "oldest_updated_at": oldest,
+            "newest_updated_at": newest,
+            "duplicate_fingerprints": duplicate_fingerprints,
+            "by_category": category_counts,
+            "by_repo": repo_counts,
+            "by_source_kind": source_kind_counts,
+            "by_priority": priority_counts,
+        }
+
+    def find_similar(
+        self,
+        request: "FindSimilarRequest",
+    ) -> list[dict[str, Any]]:
+        """Find memories similar to a given text or an existing memory ID."""
+        query_text: str
+        if request.memory_id:
+            item = self.get_memory_item(project_id=request.project_id, memory_id=request.memory_id)
+            if item is None:
+                return []
+            query_text = item.memory
+        elif request.text:
+            query_text = request.text
+        else:
+            return []
+
+        memory = self.get_memory(request.project_id)
+        raw_results = results_from_payload(
+            memory.search(query=query_text, agent_id=request.project_id, limit=request.limit + 5)
+        )
+        results: list[dict[str, Any]] = []
+        for raw in raw_results:
+            item = _coerce_memory_item(raw)
+            # Skip the seed item itself
+            if request.memory_id and item.id == request.memory_id:
+                continue
+            score = item.extra.get("score", 0.0) if hasattr(item, "extra") else 0.0
+            results.append({
+                "id": item.id,
+                "score": score,
+                "memory": item.memory,
+                "metadata": item.metadata.as_dict(),
+            })
+            if len(results) >= request.limit:
+                break
+        return results
+
+    def bulk_store(
+        self,
+        memories: list[dict[str, Any]],
+        *,
+        project_id: str,
+        pre_fetched_items: list | None = None,
+    ) -> list[dict[str, Any]]:
+        """Store multiple memories in one call. Returns per-item results."""
+        from memory_types import StoreMemoryRequest, VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
+        items = pre_fetched_items if pre_fetched_items is not None else self.get_all_items(project_id)
+        results: list[dict[str, Any]] = []
+        for mem in memories:
+            try:
+                source_kind = str(mem.get("source_kind") or "summary")
+                category = str(mem.get("category") or source_kind)
+                raw_priority = mem.get("priority")
+                priority = raw_priority if isinstance(raw_priority, str) and raw_priority in VALID_PRIORITIES else "normal"
+                request = StoreMemoryRequest(
+                    project_id=project_id,
+                    content=str(mem.get("content") or mem.get("body") or "").strip(),
+                    repo=mem.get("repo") or None,
+                    source_path=mem.get("source_path") or None,
+                    source_kind=source_kind,
+                    category=category,
+                    module=mem.get("module") or None,
+                    tags=[t for t in (mem.get("tags") or []) if isinstance(t, str)],
+                    upsert_key=mem.get("upsert_key") or None,
+                    fingerprint=mem.get("fingerprint") or None,
+                    priority=priority,
+                )
+                if not request.content:
+                    results.append({"ok": False, "error": "empty content", "ids": []})
+                    continue
+                deleted_count, new_ids = self.store_memory(request, pre_fetched_items=items)
+                results.append({"ok": True, "deleted_existing": deleted_count, "ids": new_ids})
+            except Exception as exc:
+                results.append({"ok": False, "error": str(exc), "ids": []})
+        return results
 
     def delete_memory(
         self,
@@ -376,6 +566,10 @@ class MemoryManager:
         project_results = await self._collect_project_searches(
             request.project_ids, request.query, candidate_pool
         )
+        # Parse date range filters once
+        after_date = parse_datetime(getattr(request, "after_date", None))
+        before_date = parse_datetime(getattr(request, "before_date", None))
+
         merged_candidates: list[dict[str, Any]] = []
         for search_project_id in request.project_ids:
             for raw_item in project_results.get(search_project_id, []):
@@ -388,6 +582,13 @@ class MemoryManager:
                     categories=categories,
                 ):
                     continue
+                # Date range filtering
+                if after_date or before_date:
+                    updated = parse_datetime(item.metadata.updated_at)
+                    if after_date and (updated is None or updated < after_date):
+                        continue
+                    if before_date and (updated is None or updated > before_date):
+                        continue
                 merged_item = item.as_dict()
                 metadata = item.metadata.as_dict()
                 if not item.metadata.project_id:

@@ -151,6 +151,17 @@ class ResultFormatter:
             truncated=True,
         )
 
+    def highlight_text(self, text: str, query: str) -> str:
+        """Wrap query tokens in **bold** markers within text (markdown)."""
+        tokens = self._query_tokens(query)
+        if not tokens:
+            return text
+        result = text
+        for token in sorted(tokens, key=len, reverse=True):
+            pattern = re.compile(re.escape(token), re.IGNORECASE)
+            result = pattern.sub(lambda m: f"**{m.group(0)}**", result)
+        return result
+
     def format_debug_components(self, memory_item: dict[str, Any]) -> str:
         components = memory_item.get("_score_components", {})
         return (
@@ -237,6 +248,7 @@ class ResultFormatter:
         excerpt_chars: int,
         include_full_text: bool,
         include_debug: bool = False,
+        highlight: bool = False,
     ) -> str:
         item_payload = self._search_item_payload(
             memory_item,
@@ -253,12 +265,17 @@ class ResultFormatter:
         excerpt_info = item_payload["excerpt_info"]
         content_label = "body" if include_full_text else "excerpt"
         content_mode = "full" if include_full_text else excerpt_info["mode"]
+        content_text = item_payload["full_text"] if include_full_text else item_payload["excerpt"]
+        if highlight and not include_full_text:
+            content_text = self.highlight_text(content_text, query)
+        priority = metadata.get("priority", "normal")
         lines = [
             (
                 f"[{index}] score={score_text} distance={distance_text} "
                 f"project={item_payload['project_id']} "
                 f"category={metadata.get('category', 'general')} "
-                f"repo={metadata.get('repo', 'unknown-repo')}"
+                f"repo={metadata.get('repo', 'unknown-repo')} "
+                f"priority={priority}"
             ),
             f"path={metadata.get('source_path', 'unknown-path')}",
             (
@@ -266,7 +283,7 @@ class ResultFormatter:
                 f"chars={excerpt_info['start']}:{excerpt_info['end']} "
                 f"truncated={str(excerpt_info['truncated']).lower()}"
             ),
-            item_payload["full_text"] if include_full_text else item_payload["excerpt"],
+            content_text,
         ]
         if include_debug:
             lines.append(self.format_debug_components(memory_item))
@@ -355,6 +372,7 @@ class ResultFormatter:
                     excerpt_chars=request.excerpt_chars,
                     include_full_text=request.include_full_text,
                     include_debug=request.debug,
+                    highlight=getattr(request, "highlight", False),
                 )
             )
         if request.debug:

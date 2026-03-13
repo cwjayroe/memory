@@ -291,7 +291,14 @@ class ScoringEngine:
         if metadata.get("category") in self.packing.decision_categories:
             score += 0.15
 
-        return min(score, 1.0)
+        # Priority boost/penalty
+        priority = metadata.get("priority", "normal")
+        if priority == "high":
+            score += 0.20
+        elif priority == "low":
+            score -= 0.10
+
+        return min(max(score, 0.0), 1.0)
 
     def score_candidates(
         self,

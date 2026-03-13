@@ -278,8 +278,22 @@ def chunk_pdf_document(path: Path) -> list[Chunk]:
     ]
 
 
-def chunk_file(path: Path, mode: str) -> list[Chunk]:
+def chunk_file(
+    path: Path,
+    mode: str,
+    *,
+    extension_mode_map: dict[str, str] | None = None,
+) -> list[Chunk]:
+    """Chunk a file into memory-ready pieces.
+
+    If ``extension_mode_map`` is provided (e.g. ``{".py": "docstrings", ".md": "headings"}``),
+    the mode for the file's extension overrides the ``mode`` argument.
+    """
     suffix = path.suffix.lower()
+
+    # Per-extension mode override
+    if extension_mode_map:
+        mode = extension_mode_map.get(suffix, mode)
 
     if suffix == ".pdf":
         return chunk_pdf_document(path)
