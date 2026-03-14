@@ -1,8 +1,70 @@
 # Project Memory
 
-This repo provides a local scoped memory and context system for agent workflows in tools such as Codex, Cursor, and Claude. It combines an MCP server for retrieval and CRUD operations with a small ingestion CLI for repo maintenance and manifest management.
+A local scoped memory and context system for agent workflows (Codex, Cursor, Claude). Combines an MCP server for retrieval and CRUD with a CLI for repo ingestion and manifest management. Uses a hybrid vector + SQLite backend for semantic search, structured metadata, entity graphs, and audit logging.
 
-The implementation currently uses `project_id` as the storage and retrieval namespace key. In practice, a `project_id` can represent a project, domain, workstream, standards pack, migration, incident, customer issue, or any other durable context scope.
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [What it supports](#what-it-supports)
+- [Example scope shapes](#example-scope-shapes)
+- [Documentation](#documentation)
+- [Repo layout](#repo-layout)
+- [Install](#install)
+- [Run tests](#run-tests)
+- [Manifest model](#manifest-model)
+- [MCP server](#mcp-server)
+- [Runtime configuration](#runtime-configuration)
+- [CLI workflows](#cli-workflows)
+- [PDF ingestion](#pdf-ingestion)
+- [Retention policy](#retention-policy)
+- [Codex skill](#codex-skill)
+- [Debugging](#debugging)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick Start
+
+```bash
+# 1. Clone and install dependencies
+git clone <repo-url>
+cd memory
+python -m pip install -r requirements.txt
+
+# 2. Start Ollama (required for embeddings and LLM operations)
+ollama serve
+ollama pull llama3.2
+
+# 3. Set your primary scope
+export PROJECT_ID=my-project
+
+# 4. (Optional) Set storage root — defaults to ~/.project-memory
+export PROJECT_MEMORY_ROOT=~/.project-memory
+
+# 5. Start the MCP server
+python mcp_server.py
+
+# 6. Verify everything is working
+python examples.py
+```
+
+To ingest your first repo, edit `projects.yaml` to add your project and repo, then:
+
+```bash
+python ingest.py project-init \
+  --project my-project \
+  --repos my-repo \
+  --description "My project context"
+
+python ingest.py repo \
+  --project my-project \
+  --repo my-repo \
+  --mode mixed
+```
+
+See [docs/ingestion-guide.md](docs/ingestion-guide.md) for full ingestion documentation.
+
+---
 
 ## What it supports
 - scoped memories keyed by `project_id`
@@ -15,6 +77,21 @@ The implementation currently uses `project_id` as the storage and retrieval name
 - `billing-domain`: cross-repo context for a subsystem or business area
 - `migration-2026`: initiative or workstream context spanning many repos
 - `customer-escalation-acme`: incident or customer-specific context bundle
+
+## Documentation
+
+Detailed documentation lives in the `docs/` directory:
+
+| Document | Contents |
+|----------|----------|
+| [docs/architecture.md](docs/architecture.md) | System architecture, component map, data flow diagrams, design decisions |
+| [docs/mcp-tools-reference.md](docs/mcp-tools-reference.md) | Full parameter reference for all 30 MCP tools with examples |
+| [docs/configuration.md](docs/configuration.md) | All environment variables, manifest schema reference, scope resolution walkthrough |
+| [docs/scoring-and-ranking.md](docs/scoring-and-ranking.md) | Hybrid scoring formula, ranking modes, candidate packing, tuning guide |
+| [docs/ingestion-guide.md](docs/ingestion-guide.md) | Chunking modes, all CLI subcommands, deduplication, watch mode, retention policy tiers |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common errors, health check guide, debugging techniques |
+
+---
 
 ## Repo layout
 - `mcp_server.py`: MCP server exposing retrieval, CRUD, and maintenance tools
