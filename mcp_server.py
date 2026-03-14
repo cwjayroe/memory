@@ -49,14 +49,43 @@ from manifest import (
     DEFAULT_INCLUDE,
     guess_repo_root,
 )
+from rate_limiter import RateLimiter
+from access_control import AccessController
+from metrics import METRICS, OperationTimer, new_correlation_id, configure_structured_logging
+from cache_backend import create_cache_backend
 
 LOGGER = logging.getLogger(__name__)
 config = ServerConfig.from_env()
+
+# Structured logging for production deployments
+if config.structured_logging:
+    configure_structured_logging()
+
 app = Server("memory")
 scoring_engine = ScoringEngine(
     reranker=RerankerManager(config.reranker_model_name),
 )
-mem_manager = MemoryManager(config=config, scoring_engine=scoring_engine, logger=LOGGER)
+
+# Enterprise: pluggable cache backend
+cache_backend = create_cache_backend(
+    backend=config.cache_backend,
+    max_entries=config.cache_max_entries,
+    default_ttl=config.cache_ttl_seconds,
+    redis_url=config.redis_url,
+    redis_key_prefix=config.redis_key_prefix,
+)
+
+mem_manager = MemoryManager(
+    config=config,
+    scoring_engine=scoring_engine,
+    logger=LOGGER,
+    cache_backend=cache_backend,
+)
+
+# Enterprise: rate limiter and access control
+rate_limiter = RateLimiter(enabled=config.rate_limit_enabled)
+access_controller = AccessController(enabled=config.access_control_enabled)
+access_controller.load_from_env()
 
 
 SEARCH_PARSE_POLICY = SearchContextParsePolicy(
@@ -594,18 +623,63 @@ async def _handle_get_stats(arguments: dict[str, Any]) -> list[TextContent]:
 
 
 async def _handle_health_check(arguments: dict[str, Any]) -> list[TextContent]:
-    from health import run_health_check
+    from health import run_health_check, readiness_check, liveness_check
     from constants import OLLAMA_BASE_URL, OLLAMA_MODEL
 
+    probe = str(arguments.get("probe") or "full").lower()
     skip_slow = bool(arguments.get("skip_slow", False))
-    result = run_health_check(
-        ollama_base_url=OLLAMA_BASE_URL,
-        ollama_model=OLLAMA_MODEL,
-        reranker_model=config.reranker_model_name,
-        default_project_id=DEFAULT_PROJECT_ID,
-        skip_slow=skip_slow,
-    )
+
+    if probe == "liveness":
+        result = liveness_check()
+    elif probe == "readiness":
+        result = readiness_check(
+            ollama_base_url=OLLAMA_BASE_URL,
+            ollama_model=OLLAMA_MODEL,
+            reranker_model=config.reranker_model_name,
+            default_project_id=DEFAULT_PROJECT_ID,
+            chroma_mode=config.chroma_mode,
+            chroma_host=config.chroma_host,
+            chroma_port=config.chroma_port,
+            cache_backend=config.cache_backend,
+            redis_url=config.redis_url,
+            skip_slow=skip_slow,
+            pool_stats=mem_manager.pool_stats(),
+            cache_stats=mem_manager.cache_stats(),
+        )
+    else:
+        result = run_health_check(
+            ollama_base_url=OLLAMA_BASE_URL,
+            ollama_model=OLLAMA_MODEL,
+            reranker_model=config.reranker_model_name,
+            default_project_id=DEFAULT_PROJECT_ID,
+            skip_slow=skip_slow,
+        )
     return [TextContent(type="text", text=json.dumps(result, indent=2, sort_keys=False))]
+
+
+async def _handle_metrics(arguments: dict[str, Any]) -> list[TextContent]:
+    """Return operational metrics snapshot."""
+    snapshot = METRICS.snapshot()
+    snapshot["connection_pool"] = mem_manager.pool_stats()
+    snapshot["search_cache"] = mem_manager.cache_stats()
+    snapshot["rate_limiter"] = rate_limiter.stats()
+    snapshot["access_control"] = access_controller.stats()
+    return [TextContent(type="text", text=json.dumps(snapshot, indent=2, sort_keys=False))]
+
+
+async def _handle_bulk_store_async(arguments: dict[str, Any]) -> list[TextContent]:
+    """Async bulk store with concurrency-limited parallelism."""
+    project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID)
+    memories_raw = arguments.get("memories")
+    if not isinstance(memories_raw, list) or not memories_raw:
+        return [TextContent(type="text", text="memories must be a non-empty list of objects.")]
+
+    results = await mem_manager.bulk_store_async(memories_raw, project_id=project_id)
+    ok_count = sum(1 for r in results if r.get("ok"))
+    err_count = len(results) - ok_count
+    summary = f"bulk_store_async project={project_id}: total={len(results)} ok={ok_count} errors={err_count}"
+    detail = json.dumps(results, indent=2)
+    return [TextContent(type="text", text=f"{summary}\n{detail}")]
 
 
 async def _handle_find_similar(arguments: dict[str, Any]) -> list[TextContent]:
@@ -763,8 +837,65 @@ async def _handle_summarize_scope(arguments: dict[str, Any]) -> list[TextContent
     return [TextContent(type="text", text=f"Summary for project={project_id}:\n\n{summary}")]
 
 
+# Operations that modify state (need write access check)
+_WRITE_OPERATIONS = frozenset({
+    "store_memory", "update_memory", "delete_memory", "bulk_store",
+    "bulk_store_async", "move_memory", "copy_scope", "clear_memories",
+    "ingest_repo", "ingest_file", "prune_memories", "init_project",
+    "policy_run",
+})
+
+# Map tool names to rate limit operation categories
+_RATE_LIMIT_CATEGORIES: dict[str, str] = {
+    "search_context": "search",
+    "store_memory": "store",
+    "bulk_store": "bulk_store",
+    "bulk_store_async": "bulk_store",
+    "list_memories": "list",
+    "delete_memory": "delete",
+    "ingest_repo": "ingest",
+    "ingest_file": "ingest",
+}
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    # Assign a correlation ID for this request
+    cid = new_correlation_id()
+    METRICS.increment("requests.total")
+
+    # Rate limiting
+    if rate_limiter.enabled:
+        tenant_id = access_controller.resolve_tenant(arguments)
+        rl_key = f"{_RATE_LIMIT_CATEGORIES.get(name, 'default')}:{tenant_id}"
+        rl_op = _RATE_LIMIT_CATEGORIES.get(name, "default")
+        if not rate_limiter.allow(rl_key, operation=rl_op):
+            METRICS.increment("requests.rate_limited")
+            wait = rate_limiter.wait_time(rl_key, operation=rl_op)
+            return [TextContent(
+                type="text",
+                text=f"Rate limited. Retry after {wait:.1f}s. correlation_id={cid}",
+            )]
+
+    # Access control
+    if access_controller.enabled:
+        tenant_id = access_controller.resolve_tenant(arguments)
+        project_id = str(
+            arguments.get("project_id")
+            or arguments.get("project")
+            or DEFAULT_PROJECT_ID
+        )
+        if name in _WRITE_OPERATIONS:
+            allowed, reason = access_controller.check_write(tenant_id, project_id)
+        else:
+            allowed, reason = access_controller.check_access(tenant_id, project_id)
+        if not allowed:
+            METRICS.increment("requests.access_denied")
+            return [TextContent(
+                type="text",
+                text=f"Access denied: {reason}. tenant={tenant_id} project={project_id} correlation_id={cid}",
+            )]
+
     if name == "search_context":
         return await _handle_search_context(arguments)
     elif name == "store_memory":
@@ -781,6 +912,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _handle_find_similar(arguments)
     elif name == "bulk_store":
         return await _handle_bulk_store(arguments)
+    elif name == "bulk_store_async":
+        return await _handle_bulk_store_async(arguments)
     elif name == "move_memory":
         return await _handle_move_memory(arguments)
     elif name == "copy_scope":
@@ -791,6 +924,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _handle_get_stats(arguments)
     elif name == "health_check":
         return await _handle_health_check(arguments)
+    elif name == "metrics":
+        return await _handle_metrics(arguments)
     elif name == "summarize_scope":
         return await _handle_summarize_scope(arguments)
     elif name == "ingest_repo":
@@ -1249,17 +1384,70 @@ async def list_tools() -> list[Tool]:
             name="health_check",
             description=(
                 "Check connectivity and readiness of all system components: "
-                "Ollama, Chroma, embedding model, and reranker."
+                "Ollama, Chroma, embedding model, reranker, and optional Redis. "
+                "Supports liveness/readiness probes for Kubernetes."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "probe": {
+                        "type": "string",
+                        "enum": ["full", "liveness", "readiness"],
+                        "default": "full",
+                        "description": "Probe type: liveness (fast), readiness (dependencies), full (all)",
+                    },
                     "skip_slow": {
                         "type": "boolean",
                         "default": False,
                         "description": "Skip slow model-load checks (embedding + reranker)",
                     },
                 },
+            },
+        ),
+        Tool(
+            name="metrics",
+            description=(
+                "Return operational metrics snapshot: request counts, latency "
+                "histograms, connection pool stats, cache hit rates, rate limiter "
+                "status, and access control violations."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="bulk_store_async",
+            description=(
+                "Async bulk store with concurrency-limited parallelism. "
+                "Faster than bulk_store for large batches (>50 items) as it "
+                "processes items concurrently within configurable limits."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "memories": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string"},
+                                "repo": {"type": "string"},
+                                "source_path": {"type": "string"},
+                                "source_kind": {"type": "string"},
+                                "category": {"type": "string"},
+                                "module": {"type": "string"},
+                                "tags": {"type": "array", "items": {"type": "string"}},
+                                "upsert_key": {"type": "string"},
+                                "fingerprint": {"type": "string"},
+                                "priority": {"type": "string", "enum": ["high", "normal", "low"]},
+                            },
+                            "required": ["content"],
+                        },
+                    },
+                },
+                "required": ["memories"],
             },
         ),
         Tool(
