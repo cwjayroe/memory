@@ -12,19 +12,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-try:
-    from rank_bm25 import BM25Okapi
-except Exception:  # pragma: no cover - optional dependency
-    BM25Okapi = None
+from rank_bm25 import BM25Okapi
 
-try:
-    from .constants import DEFAULT_PROJECT_ID
-    from .memory_types import MemoryItem
-    from .helpers import normalize_tags, parse_datetime
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from constants import DEFAULT_PROJECT_ID  # type: ignore
-    from memory_types import MemoryItem  # type: ignore
-    from helpers import normalize_tags, parse_datetime  # type: ignore
+from constants import DEFAULT_PROJECT_ID 
+from memory_types import MemoryItem
+from helpers import normalize_tags, parse_datetime  
 
 LOGGER = logging.getLogger(__name__)
 

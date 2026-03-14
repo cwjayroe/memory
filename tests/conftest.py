@@ -106,3 +106,58 @@ def _reset_module_state():
     ingest._MEM_MANAGER = None
     mcp_server.mem_manager._search_cache.clear()
     mcp_server.mem_manager._memory_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures for test reuse
+# ---------------------------------------------------------------------------
+
+
+class FakeMemoryManager:
+    """Lightweight fake for MemoryManager used across test files."""
+
+    def __init__(self):
+        self.deleted = []
+        self.add_calls = []
+        self.all_results = []
+        self.search_results = []
+
+    def add(self, content, **kwargs):
+        self.add_calls.append({"content": content, **kwargs})
+        return {"results": [{"id": f"fake-{len(self.add_calls)}"}]}
+
+    def get_all(self, **_kwargs):
+        return {"results": list(self.all_results)}
+
+    def delete(self, memory_id):
+        self.deleted.append(memory_id)
+
+    def search(self, **kwargs):
+        return {"results": list(self.search_results)}
+
+
+@pytest.fixture
+def fake_memory():
+    return FakeMemoryManager()
+
+
+@dataclass
+class FakeRequest:
+    """Lightweight fake for request objects used in formatting tests."""
+
+    query: str = "test query"
+    response_format: str = "text"
+    ranking_mode: str = "hybrid_weighted"
+    token_budget: int = 1800
+    debug: bool = False
+    include_full_text: bool = False
+    excerpt_chars: int = 420
+    highlight: bool = False
+    project_id: str = "proj"
+    offset: int = 0
+    limit: int = 10
+
+
+@pytest.fixture
+def fake_request():
+    return FakeRequest()

@@ -7,56 +7,19 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
-from pathlib import Path
-import sys
 from typing import Any
 
 from mem0 import Memory
-
-if __package__ in {None, ""}:
-    current_dir = Path(__file__).resolve().parent
-    if str(current_dir) not in sys.path:
-        sys.path.insert(0, str(current_dir))
-try:
-    from .scoring import (
-        ScoringEngine,
-    )
-    from .constants import (
-        DEFAULT_PROJECT_ID,
-        GET_ALL_LIMIT,
-    )
-    from .server_config import ServerConfig
-    from .memory_types import (
-        ListMemoriesRequest,
-        DeleteMemoryRequest,
-        StoreMemoryRequest,
-        SearchContextRequest,
-        UpdateMemoryRequest,
-        FindSimilarRequest,
-        MemoryItem,
-    )
-    from .helpers import (
-        _is_transient_memory_init_error,
-        _find_ids,
-        _coerce_memory_item,
-        _matches_filters,
-        get_all_items,
-        parse_datetime,
-        utc_now,
-        results_from_payload,
-        build_mem0_config,
-    )
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from scoring import (  # type: ignore
-        ScoringEngine,
-    )
-    from constants import (  # type: ignore
-        DEFAULT_PROJECT_ID,
-        GET_ALL_LIMIT,
-    )
-    from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem  # type: ignore
-    from server_config import ServerConfig  # type: ignore
-    from helpers import _is_transient_memory_init_error, _find_ids, _coerce_memory_item, _matches_filters, get_all_items, parse_datetime, utc_now, results_from_payload, build_mem0_config  # type: ignore
+from scoring import (  # type: ignore
+    ScoringEngine,
+)
+from constants import (  # type: ignore
+    DEFAULT_PROJECT_ID,
+    GET_ALL_LIMIT,
+)
+from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem  # type: ignore
+from server_config import ServerConfig  # type: ignore
+from helpers import _is_transient_memory_init_error, _find_ids, _coerce_memory_item, _matches_filters, get_all_items, parse_datetime, utc_now, results_from_payload, build_mem0_config  # type: ignore
 
 
 class MemoryManager:
@@ -252,9 +215,7 @@ class MemoryManager:
             return None
 
         memory = self.get_memory(project_id)
-        all_memories = get_all_items(
-            memory, project_id, limit=self._get_all_limit
-        )
+        all_memories = get_all_items(memory, project_id, limit=self._get_all_limit)
         for raw_item in all_memories:
             item = _coerce_memory_item(raw_item)
             if item.id == memory_id:
@@ -267,14 +228,24 @@ class MemoryManager:
     ) -> tuple[bool, str]:
         """Patch an existing memory's body and/or metadata. Returns (found, message)."""
         from memory_types import VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
-        item = self.get_memory_item(project_id=request.project_id, memory_id=request.memory_id)
+
+        item = self.get_memory_item(
+            project_id=request.project_id, memory_id=request.memory_id
+        )
         if item is None:
-            return False, f"Memory not found: project={request.project_id} id={request.memory_id}"
+            return (
+                False,
+                f"Memory not found: project={request.project_id} id={request.memory_id}",
+            )
 
         memory = self.get_memory(request.project_id)
 
         # Build updated body
-        new_body = request.body.strip() if request.body and request.body.strip() else item.memory
+        new_body = (
+            request.body.strip()
+            if request.body and request.body.strip()
+            else item.memory
+        )
 
         # Build patched metadata (merge over existing)
         existing_md = item.metadata.as_dict()
@@ -296,11 +267,17 @@ class MemoryManager:
 
         # Delete old, re-add with new content and metadata
         memory.delete(request.memory_id)
-        result = memory.add(new_body, agent_id=request.project_id, metadata=existing_md, infer=False)
+        result = memory.add(
+            new_body, agent_id=request.project_id, metadata=existing_md, infer=False
+        )
         from helpers import results_from_payload  # type: ignore  # noqa: PLC0415
+
         stored = results_from_payload(result)
         new_ids = [i.id for i in stored if isinstance(i.id, str)]
-        return True, f"Updated memory project={request.project_id} new_id={','.join(new_ids) if new_ids else 'n/a'}"
+        return (
+            True,
+            f"Updated memory project={request.project_id} new_id={','.join(new_ids) if new_ids else 'n/a'}",
+        )
 
     def get_stats(
         self,
@@ -369,7 +346,9 @@ class MemoryManager:
         """Find memories similar to a given text or an existing memory ID."""
         query_text: str
         if request.memory_id:
-            item = self.get_memory_item(project_id=request.project_id, memory_id=request.memory_id)
+            item = self.get_memory_item(
+                project_id=request.project_id, memory_id=request.memory_id
+            )
             if item is None:
                 return []
             query_text = item.memory
@@ -380,7 +359,9 @@ class MemoryManager:
 
         memory = self.get_memory(request.project_id)
         raw_results = results_from_payload(
-            memory.search(query=query_text, agent_id=request.project_id, limit=request.limit + 5)
+            memory.search(
+                query=query_text, agent_id=request.project_id, limit=request.limit + 5
+            )
         )
         results: list[dict[str, Any]] = []
         for raw in raw_results:
@@ -389,12 +370,14 @@ class MemoryManager:
             if request.memory_id and item.id == request.memory_id:
                 continue
             score = item.extra.get("score", 0.0) if hasattr(item, "extra") else 0.0
-            results.append({
-                "id": item.id,
-                "score": score,
-                "memory": item.memory,
-                "metadata": item.metadata.as_dict(),
-            })
+            results.append(
+                {
+                    "id": item.id,
+                    "score": score,
+                    "memory": item.memory,
+                    "metadata": item.metadata.as_dict(),
+                }
+            )
             if len(results) >= request.limit:
                 break
         return results
@@ -408,14 +391,24 @@ class MemoryManager:
     ) -> list[dict[str, Any]]:
         """Store multiple memories in one call. Returns per-item results."""
         from memory_types import StoreMemoryRequest, VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
-        items = pre_fetched_items if pre_fetched_items is not None else self.get_all_items(project_id)
+
+        items = (
+            pre_fetched_items
+            if pre_fetched_items is not None
+            else self.get_all_items(project_id)
+        )
         results: list[dict[str, Any]] = []
         for mem in memories:
             try:
                 source_kind = str(mem.get("source_kind") or "summary")
                 category = str(mem.get("category") or source_kind)
                 raw_priority = mem.get("priority")
-                priority = raw_priority if isinstance(raw_priority, str) and raw_priority in VALID_PRIORITIES else "normal"
+                priority = (
+                    raw_priority
+                    if isinstance(raw_priority, str)
+                    and raw_priority in VALID_PRIORITIES
+                    else "normal"
+                )
                 request = StoreMemoryRequest(
                     project_id=project_id,
                     content=str(mem.get("content") or mem.get("body") or "").strip(),
@@ -432,8 +425,12 @@ class MemoryManager:
                 if not request.content:
                     results.append({"ok": False, "error": "empty content", "ids": []})
                     continue
-                deleted_count, new_ids = self.store_memory(request, pre_fetched_items=items)
-                results.append({"ok": True, "deleted_existing": deleted_count, "ids": new_ids})
+                deleted_count, new_ids = self.store_memory(
+                    request, pre_fetched_items=items
+                )
+                results.append(
+                    {"ok": True, "deleted_existing": deleted_count, "ids": new_ids}
+                )
             except Exception as exc:
                 results.append({"ok": False, "error": str(exc), "ids": []})
         return results

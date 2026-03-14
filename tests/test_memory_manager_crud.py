@@ -348,3 +348,183 @@ def test_delete_memory_requires_selector(monkeypatch):
 
     text = _run_tool(mcp_module, "delete_memory", {"project_id": "automatic-discounts"})
     assert text == "Provide memory_id or upsert_key."
+
+
+# ---------------------------------------------------------------------------
+# update_memory
+# ---------------------------------------------------------------------------
+
+
+def test_update_memory_happy_path(monkeypatch):
+    memory = _FakeMemory()
+    memory.all_results = [
+        {
+            "id": "mem-1",
+            "memory": "original body",
+            "metadata": {
+                "category": "decision",
+                "repo": "customcheckout",
+                "source_kind": "summary",
+                "updated_at": "2026-03-01T00:00:00+00:00",
+                "tags": [],
+            },
+        },
+    ]
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
+
+    result = _run_tool(
+        mcp_module,
+        "update_memory",
+        {"memory_id": "mem-1", "body": "updated body", "category": "architecture"},
+    )
+
+    assert "Updated memory" in result
+    assert "mem-1" in memory.deleted
+    assert len(memory.add_calls) == 1
+
+
+def test_update_memory_not_found(monkeypatch):
+    memory = _FakeMemory()
+    memory.all_results = []
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
+
+    result = _run_tool(
+        mcp_module,
+        "update_memory",
+        {"memory_id": "missing", "body": "new"},
+    )
+
+    assert "Memory not found" in result
+
+
+# ---------------------------------------------------------------------------
+# get_stats
+# ---------------------------------------------------------------------------
+
+
+def test_get_stats_returns_aggregate(monkeypatch):
+    memory = _FakeMemory()
+    memory.all_results = [
+        {
+            "id": "1",
+            "memory": "decision content",
+            "metadata": {
+                "category": "decision",
+                "repo": "customcheckout",
+                "source_kind": "summary",
+                "updated_at": "2026-03-01T00:00:00+00:00",
+                "tags": [],
+            },
+        },
+        {
+            "id": "2",
+            "memory": "code chunk",
+            "metadata": {
+                "category": "code",
+                "repo": "customcheckout",
+                "source_kind": "code",
+                "updated_at": "2026-02-01T00:00:00+00:00",
+                "tags": [],
+            },
+        },
+    ]
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
+
+    result = _run_tool(mcp_module, "get_stats", {"project_id": "proj"})
+    payload = json.loads(result)
+
+    assert payload["total_memories"] == 2
+    assert "decision" in payload["by_category"]
+    assert "code" in payload["by_category"]
+
+
+# ---------------------------------------------------------------------------
+# find_similar
+# ---------------------------------------------------------------------------
+
+
+class _FakeMemoryWithSearch(_FakeMemory):
+    def __init__(self):
+        super().__init__()
+        self.search_results: list[dict] = []
+
+    def search(self, **kwargs):
+        return {"results": list(self.search_results)}
+
+
+def test_find_similar_by_text(monkeypatch):
+    memory = _FakeMemoryWithSearch()
+    memory.search_results = [
+        {
+            "id": "sim1",
+            "memory": "similar item",
+            "score": 0.9,
+            "metadata": {"category": "decision", "repo": "customcheckout", "source_kind": "summary", "updated_at": "2026-03-01T00:00:00+00:00", "tags": []},
+        },
+    ]
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
+
+    result = _run_tool(
+        mcp_module,
+        "find_similar",
+        {"text": "test query", "project_id": "proj"},
+    )
+
+    assert "Found 1 similar" in result
+
+
+def test_find_similar_no_input():
+    result = _run_tool(mcp_module, "find_similar", {})
+    assert "Provide memory_id or text." in result
+
+
+# ---------------------------------------------------------------------------
+# bulk_store
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_store_multiple_items(monkeypatch):
+    memory = _FakeMemory()
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
+
+    result = _run_tool(
+        mcp_module,
+        "bulk_store",
+        {"memories": [{"content": "first"}, {"content": "second"}]},
+    )
+
+    assert "ok=2" in result
+
+
+def test_bulk_store_empty_content_rejected():
+    result = _run_tool(mcp_module, "bulk_store", {"memories": [{"content": "  "}]})
+    assert "errors=1" in result
+
+
+# ---------------------------------------------------------------------------
+# get_memory (found / not found)
+# ---------------------------------------------------------------------------
+
+
+def test_get_memory_item_found_and_not_found(monkeypatch):
+    memory = _FakeMemory()
+    memory.all_results = [
+        {
+            "id": "mem-1",
+            "memory": "stored content",
+            "metadata": {
+                "category": "decision",
+                "repo": "customcheckout",
+                "source_kind": "summary",
+                "updated_at": "2026-03-01T00:00:00+00:00",
+                "tags": [],
+            },
+        },
+    ]
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
+
+    found_result = _run_tool(mcp_module, "get_memory", {"memory_id": "mem-1"})
+    assert "Memory for project=" in found_result
+
+    not_found_result = _run_tool(mcp_module, "get_memory", {"memory_id": "missing"})
+    assert "Memory not found" in not_found_result

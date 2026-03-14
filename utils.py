@@ -1,9 +1,5 @@
 from typing import Any
-
-try:
-    from .constants import DEFAULT_RESPONSE_FORMAT, ALLOWED_RESPONSE_FORMATS, DEFAULT_EXCERPT_CHARS, MIN_EXCERPT_CHARS, MAX_EXCERPT_CHARS
-except ImportError:  # pragma: no cover - direct script/import fallback
-    from constants import DEFAULT_RESPONSE_FORMAT, ALLOWED_RESPONSE_FORMATS, DEFAULT_EXCERPT_CHARS, MIN_EXCERPT_CHARS, MAX_EXCERPT_CHARS  # type: ignore
+from constants import DEFAULT_RESPONSE_FORMAT, ALLOWED_RESPONSE_FORMATS, DEFAULT_EXCERPT_CHARS, MIN_EXCERPT_CHARS, MAX_EXCERPT_CHARS  # type: ignore
 
 
 def safe_int(value: Any, default: int) -> int:

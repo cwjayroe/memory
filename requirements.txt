@@ -12,3 +12,6 @@ chromadb
 ollama
 sentence-transformers 
 transformers
+rank_bm25
+watchdog
+debugpy

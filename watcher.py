@@ -6,21 +6,14 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import Any, Callable
 
 LOGGER = logging.getLogger(__name__)
-
-try:
-    from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
-    WATCHDOG_AVAILABLE = True
-except ImportError:
-    WATCHDOG_AVAILABLE = False
-    Observer = None
-    FileSystemEventHandler = object
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 
-class _DebounceHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else object):  # type: ignore[misc]
+class _DebounceHandler(FileSystemEventHandler):
     """Debounced file-change handler that calls a callback after a quiet period."""
 
     def __init__(
@@ -30,9 +23,8 @@ class _DebounceHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else object)
         exclude: list[str],
         root: Path,
         debounce_seconds: float = 3.0,
-    ):
-        if WATCHDOG_AVAILABLE:
-            super().__init__()
+    ): 
+        super().__init__()
         self._callback = callback
         self._include = include
         self._exclude = exclude
@@ -95,13 +87,7 @@ def watch_repo(
     mem_manager: Any = None,
 ) -> None:
     """Watch a repo directory and auto-ingest changed files. Blocks until interrupted."""
-    if not WATCHDOG_AVAILABLE:
-        raise RuntimeError(
-            "watch mode requires the 'watchdog' package. "
-            "Install it with: pip install watchdog"
-        )
-
-    from ingest import ingest_file, collect_files  # type: ignore
+    from ingest import ingest_file
 
     mm = mem_manager
     if mm is None:
@@ -142,6 +128,3 @@ def watch_repo(
         observer.stop()
     observer.join()
 
-
-# Allow Any annotation without importing
-from typing import Any  # noqa: E402

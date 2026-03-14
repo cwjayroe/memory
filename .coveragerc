@@ -1,0 +1,24 @@
+[run]
+source = .
+omit =
+    tests/*
+    .artifacts/*
+    skills/*
+    .venv/*
+
+[report]
+show_missing = True
+fail_under = 70
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    ^\s*pass$
+
+[html]
+directory = .artifacts/coverage/html
+
+[json]
+output = .artifacts/coverage/coverage.json
+
+[xml]
+output = .artifacts/coverage/coverage.xml

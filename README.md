@@ -27,6 +27,7 @@ The implementation currently uses `project_id` as the storage and retrieval name
 - `formatting.py`: text/json response formatting
 - `scoring.py`: ranking, reranking, dedupe, and candidate packing
 - `server_config.py`: environment-driven MCP configuration
+- `health.py`: health-check utilities (Ollama, Chroma, embedding model, reranker) used by the `health_check` MCP tool
 - `projects.yaml`: manifest v2 source of truth
 - `skills/project-memory/SKILL.md`: Codex skill for preload and capture workflows
 
@@ -61,6 +62,15 @@ python -m pytest -q tests \
   --cov-report=json:.artifacts/coverage/coverage.json \
   --cov-report=xml:.artifacts/coverage/coverage.xml \
   --cov-report=html:.artifacts/coverage/html
+```
+
+Coverage uses [.coveragerc](.coveragerc) when you run `pytest` with `--cov`; it sets `fail_under = 70`, omits `tests/`, `.artifacts/`, `skills/`, `.venv/`, and writes html/json/xml under `.artifacts/coverage/`. You can also run `python -m pytest -q --cov=. --cov-report=term-missing` and rely on `.coveragerc` for other options.
+
+### Examples script
+[examples.py](examples.py) spawns the MCP server as a subprocess and runs async examples (list tools, search_context, store/list/delete). Use it to sanity-check the server or as a reference for programmatic MCP usage:
+
+```bash
+python examples.py
 ```
 
 ## Manifest model
@@ -102,6 +112,20 @@ python mcp_server.py
 - `policy_run`
 - `clear_memories`
 
+### Additional MCP tools
+- `update_memory`: update an existing memory's body and/or metadata (patch semantics; supply only fields to change). Required: `memory_id`; optional: `body`, `repo`, `source_path`, `source_kind`, `category`, `module`, `tags`, `priority`.
+- `find_similar`: find memories semantically similar to a given text or an existing memory ID (for dedup review or related-context discovery). Optional: `project_id`, `memory_id`, `text`, `limit`, `threshold`, `response_format`. Provide either `memory_id` or `text`.
+- `bulk_store`: store multiple memories in one call; returns per-item success/error. Required: `memories` (array of objects with `content`); optional: `project_id`. Each item can include `repo`, `source_path`, `source_kind`, `category`, `module`, `tags`, `upsert_key`, `fingerprint`, `priority`.
+- `get_stats`: aggregate statistics for a scope (total count, breakdown by category/repo/source_kind/priority, oldest/newest timestamps, estimated token coverage). Optional: `project_id`, `repo`.
+- `health_check`: check connectivity and readiness of Ollama, Chroma, embedding model, and reranker. Optional: `skip_slow` (skip slow model-load checks).
+- `move_memory`: move one memory from one scope to another (re-store under target, delete from source). Required: `memory_id`, `target_project_id`; optional: `project_id` (source scope).
+- `copy_scope`: copy all memories from one scope to another. Required: `from_project_id`, `to_project_id`. Optional: `dry_run` (preview without writing).
+- `export_scope`: export all memories for a scope as a JSON array or newline-delimited JSON (backup or cross-machine migration). Optional: `project_id`, `format` (`json` or `ndjson`).
+- `summarize_scope`: generate a prose summary of scope contents (grouped by category) using the configured LLM. Optional: `project_id`, `repo`, `category`, `max_tokens`.
+
+### Project stats (`get_stats`)
+Use the `get_stats` MCP tool to inspect a scope without running search or embeddings. Arguments: `project_id` (optional; defaults to configured scope), `repo` (optional filter). The response is JSON with: `total_memories`, `estimated_tokens`, `oldest_updated_at`, `newest_updated_at`, `duplicate_fingerprints`, and breakdowns `by_category`, `by_repo`, `by_source_kind`, `by_priority`. Useful for audits and capacity checks.
+
 ### `search_context`
 Required:
 - `query`
@@ -116,6 +140,9 @@ Filters:
 - `path_prefix`
 - `tags`
 - `categories`
+- `after_date`, `before_date`: ISO 8601 datetime; only return memories updated in that range
+- `highlight`: wrap matching query tokens in **bold** in excerpt text
+- `search_all_scopes`: search across all manifest scopes (ignores `project_id` / `project_ids`)
 
 Ranking controls:
 - `ranking_mode`: `hybrid_weighted_rerank` or `hybrid_weighted`
@@ -138,10 +165,13 @@ Search behavior:
 - use `get_memory` after search when you need the full untruncated body for one result
 
 ### `list_memories` and `get_memory`
-- `list_memories` supports `response_format`, `include_full_text`, and `excerpt_chars`
+- `list_memories` supports `response_format`, `include_full_text`, and `excerpt_chars`; and `sort_by` (e.g. `updated_at`, `created_at`, `category`, `repo`) and `sort_order` (`asc` / `desc`)
 - default list output is excerpted/snippet-oriented
 - `get_memory` is the exact-read endpoint for one `memory_id`
 - `get_memory` returns the full stored body in both text and json modes
+
+### `store_memory`
+- In addition to the fields in the tool list, `store_memory` supports `priority` (high/normal/low; affects ranking weight) and `suggest_tags` (return suggested tags extracted from the body).
 
 ### Maintenance tools
 The MCP server also exposes maintenance operations for repo workflows:
@@ -150,7 +180,7 @@ The MCP server also exposes maintenance operations for repo workflows:
 - `context_plan`: preview the resolved layered context payloads for a repo
 - `prune_memories`: remove duplicate fingerprints and/or stale missing-path items in a selected scope
 - `init_project`: create or update a manifest scope entry using the current `project` field name, with optional `set_repo_defaults`
-- `policy_run`: preview or apply the retention policy through MCP
+- `policy_run`: preview or apply the retention policy through MCP; use `verbose=true` in dry-run to show per-memory deletion details (excerpt, reason, age)
 - `clear_memories`: delete all memories for a selected scope after explicit confirmation
 
 ## Runtime configuration
@@ -213,12 +243,13 @@ python ingest.py context-plan \
   --repo billing-api
 ```
 
-Preview retention policy effects:
+Preview retention policy effects (use `--verbose` in dry-run to show per-memory deletion details):
 
 ```bash
 python ingest.py policy-run \
   --project migration-2026 \
-  --mode dry-run
+  --mode dry-run \
+  --verbose
 ```
 
 Apply the retention policy:
@@ -283,6 +314,35 @@ Clear all memories for a scope:
 ```bash
 python ingest.py clear \
   --project customer-escalation-acme
+```
+
+### Export, import, and watch
+Export all memories for a scope to newline-delimited JSON (default: stdout; use `--output` to write to a file):
+
+```bash
+python ingest.py export \
+  --project billing-domain \
+  --output ./backup.ndjson
+```
+
+Import memories from an NDJSON file into a scope (existing memories with matching keys are upserted when `--upsert` is set, which is the default):
+
+```bash
+python ingest.py import \
+  --project migration-2026 \
+  --file ./backup.ndjson
+```
+
+Watch a directory and auto-ingest changed files (uses manifest-backed repo config; `--debounce` defaults to 3 seconds):
+
+```bash
+python ingest.py watch \
+  --project billing-domain \
+  --repo billing-api \
+  --root /path/to/repo \
+  --include "*.py,*.md" \
+  --exclude "*.pyc" \
+  --debounce 3.0
 ```
 
 ## PDF ingestion

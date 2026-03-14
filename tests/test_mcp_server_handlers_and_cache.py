@@ -189,3 +189,204 @@ def test_search_context_json_mode_can_include_full_text(monkeypatch):
     assert payload["items"][0]["id"] == "memory-1"
     assert payload["items"][0]["full_text"] == "Exact full body for search result."
     assert payload["items"][0]["excerpt_info"]["mode"] in {"full", "matched-window", "prefix"}
+
+
+# ---------------------------------------------------------------------------
+# update_memory
+# ---------------------------------------------------------------------------
+
+
+def test_update_memory_success(monkeypatch):
+    monkeypatch.setattr(
+        mcp_module.mem_manager,
+        "update_memory",
+        lambda **kw: (True, "Updated memory project=proj new_id=new-1"),
+    )
+    result = _run_tool(mcp_module, "update_memory", {"memory_id": "mem-1", "body": "new body"})
+    assert "Updated memory" in result
+
+
+def test_update_memory_missing_memory_id(monkeypatch):
+    result = _run_tool(mcp_module, "update_memory", {"body": "new body"})
+    assert "memory_id is required." in result
+
+
+def test_update_memory_no_fields(monkeypatch):
+    result = _run_tool(mcp_module, "update_memory", {"memory_id": "mem-1"})
+    assert "Provide at least one field to update" in result
+
+
+# ---------------------------------------------------------------------------
+# find_similar
+# ---------------------------------------------------------------------------
+
+
+def test_find_similar_success(monkeypatch):
+    monkeypatch.setattr(
+        mcp_module.mem_manager,
+        "find_similar",
+        lambda **kw: [{"id": "s1", "score": 0.9, "memory": "similar", "metadata": {"category": "decision"}}],
+    )
+    result = _run_tool(mcp_module, "find_similar", {"text": "test query"})
+    assert "Found 1 similar" in result
+
+
+def test_find_similar_missing_memory_id_and_text(monkeypatch):
+    result = _run_tool(mcp_module, "find_similar", {})
+    assert "Provide memory_id or text." in result
+
+
+def test_find_similar_no_results(monkeypatch):
+    monkeypatch.setattr(mcp_module.mem_manager, "find_similar", lambda **kw: [])
+    result = _run_tool(mcp_module, "find_similar", {"text": "test query"})
+    assert "No similar memories found." in result
+
+
+# ---------------------------------------------------------------------------
+# bulk_store
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_store_success(monkeypatch):
+    monkeypatch.setattr(
+        mcp_module.mem_manager,
+        "bulk_store",
+        lambda *a, **kw: [{"ok": True, "deleted_existing": 0, "ids": ["id1"]}],
+    )
+    result = _run_tool(mcp_module, "bulk_store", {"memories": [{"content": "test"}]})
+    assert "ok=1" in result
+
+
+def test_bulk_store_empty_memories(monkeypatch):
+    result = _run_tool(mcp_module, "bulk_store", {"memories": []})
+    assert "memories must be a non-empty list" in result
+
+
+def test_bulk_store_non_list_memories(monkeypatch):
+    result = _run_tool(mcp_module, "bulk_store", {"memories": "not a list"})
+    assert "memories must be a non-empty list" in result
+
+
+# ---------------------------------------------------------------------------
+# get_stats
+# ---------------------------------------------------------------------------
+
+
+def test_get_stats_success(monkeypatch):
+    monkeypatch.setattr(
+        mcp_module.mem_manager,
+        "get_stats",
+        lambda *a, **kw: {"project_id": "proj", "total_memories": 10},
+    )
+    result = _run_tool(mcp_module, "get_stats", {"project_id": "proj"})
+    data = json.loads(result)
+    assert data["total_memories"] == 10
+
+
+# ---------------------------------------------------------------------------
+# health_check
+# ---------------------------------------------------------------------------
+
+
+def test_health_check_success(monkeypatch):
+    import health as health_mod
+
+    monkeypatch.setattr(
+        health_mod,
+        "run_health_check",
+        lambda **kw: {"overall": "ok", "components": {}},
+    )
+    result = _run_tool(mcp_module, "health_check", {})
+    data = json.loads(result)
+    assert data["overall"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# move_memory
+# ---------------------------------------------------------------------------
+
+
+def test_move_memory_success(monkeypatch):
+    from memory_types import MemoryItem
+
+    fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
+    fake_target = type("FakeMemory", (), {"add": lambda *a, **kw: {"results": [{"id": "new-1", "memory": "body", "metadata": {"category": "decision"}}]}})()
+
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory_item", lambda *a, **kw: fake_item)
+    monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda *a, **kw: fake_target)
+    monkeypatch.setattr(mcp_module.mem_manager, "delete_memory", lambda *a, **kw: None)
+
+    result = _run_tool(mcp_module, "move_memory", {"memory_id": "m1", "target_project_id": "proj2"})
+    assert "Moved memory" in result
+
+
+def test_move_memory_missing_memory_id(monkeypatch):
+    result = _run_tool(mcp_module, "move_memory", {"target_project_id": "proj2"})
+    assert "memory_id is required." in result
+
+
+def test_move_memory_missing_target_project_id(monkeypatch):
+    result = _run_tool(mcp_module, "move_memory", {"memory_id": "m1"})
+    assert "target_project_id is required." in result
+
+
+# ---------------------------------------------------------------------------
+# copy_scope
+# ---------------------------------------------------------------------------
+
+
+def test_copy_scope_dry_run(monkeypatch):
+    from memory_types import MemoryItem
+
+    fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
+    monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda *a, **kw: [fake_item])
+
+    result = _run_tool(
+        mcp_module,
+        "copy_scope",
+        {"from_project_id": "proj1", "to_project_id": "proj2", "dry_run": True},
+    )
+    assert "would copy 1" in result
+
+
+def test_copy_scope_missing_from_to(monkeypatch):
+    result = _run_tool(mcp_module, "copy_scope", {"from_project_id": "proj1"})
+    assert "from_project_id and to_project_id are required." in result
+
+
+def test_copy_scope_same_from_to(monkeypatch):
+    result = _run_tool(mcp_module, "copy_scope", {"from_project_id": "proj", "to_project_id": "proj"})
+    assert "from_project_id and to_project_id must differ." in result
+
+
+# ---------------------------------------------------------------------------
+# export_scope
+# ---------------------------------------------------------------------------
+
+
+def test_export_scope_success(monkeypatch):
+    from memory_types import MemoryItem
+
+    fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
+    monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda *a, **kw: [fake_item])
+
+    result = _run_tool(mcp_module, "export_scope", {"project_id": "proj"})
+    assert "Exported 1 memories" in result
+
+
+# ---------------------------------------------------------------------------
+# summarize_scope
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_scope_success(monkeypatch):
+    from memory_types import MemoryItem
+
+    import summarizer as summarizer_mod
+
+    fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
+    monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda *a, **kw: [fake_item])
+    monkeypatch.setattr(summarizer_mod, "generate_scope_summary", lambda **kw: "Test summary")
+
+    result = _run_tool(mcp_module, "summarize_scope", {"project_id": "proj"})
+    assert "Test summary" in result

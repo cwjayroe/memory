@@ -199,3 +199,114 @@ def test_project_init_uses_manifest_root_helper(tmp_path):
     manifest = ingest_module.read_manifest(manifest_path)
     repo_entry = manifest["repos"]["new-unmapped-repo"]
     assert "root" in repo_entry
+
+
+def test_ensure_manifest_v2_already_v2():
+    v2 = {
+        "version": 2,
+        "projects": {"proj": {"repos": ["repo1"]}},
+        "repos": {"repo1": {"root": "/tmp/repo1"}},
+        "context_packs": {"default_3_layer": manifest_module.DEFAULT_CONTEXT_PACK},
+    }
+    result = manifest_module._ensure_manifest_v2(v2)
+    assert result["version"] == 2
+    assert result["projects"] == v2["projects"]
+    assert result["repos"] == v2["repos"]
+
+
+def test_validate_project_id_empty_and_special_chars():
+    import pytest
+    with pytest.raises(ValueError):
+        manifest_module.validate_project_id("")
+    with pytest.raises(ValueError):
+        manifest_module.validate_project_id("Has Spaces")
+    with pytest.raises(ValueError):
+        manifest_module.validate_project_id("UPPERCASE")
+    # Valid ones should not raise (kebab-case only, no underscores)
+    manifest_module.validate_project_id("valid-project-123")
+    manifest_module.validate_project_id("myproject")
+
+
+def test_write_manifest_round_trip(tmp_path):
+    manifest_path = tmp_path / "test_manifest.yaml"
+    original = {
+        "version": 2,
+        "projects": {"test-proj": {"description": "test", "tags": ["t1"], "repos": ["r1"]}},
+        "repos": {"r1": {"root": "/tmp/r1", "include": ["*.py"], "exclude": [], "default_tags": ["r1"]}},
+        "context_packs": {},
+    }
+    manifest_module.write_manifest(manifest_path, original)
+    loaded = manifest_module.read_manifest(manifest_path)
+    assert loaded["version"] == 2
+    assert loaded["projects"]["test-proj"]["description"] == "test"
+    assert loaded["repos"]["r1"]["root"] == "/tmp/r1"
+
+
+def test_guess_repo_root():
+    # Use a repo name that exists under /Users/willjayroe/Desktop/repos (e.g. memories)
+    root = manifest_module.guess_repo_root("memories")
+    assert isinstance(root, str)
+    assert "memories" in root
+
+
+def test_resolve_repo_config_with_overrides():
+    manifest = {
+        "version": 2,
+        "projects": {"proj": {"repos": ["myrepo"]}},
+        "repos": {
+            "myrepo": {
+                "root": "/tmp/myrepo",
+                "include": ["*.py"],
+                "exclude": ["*.pyc"],
+                "default_tags": ["tag1"],
+            }
+        },
+    }
+    config = manifest_module.resolve_repo_config(
+        manifest=manifest,
+        project_id="proj",
+        repo="myrepo",
+        root_override="/custom/root",
+        include_override=["*.md"],
+        exclude_override=["*.tmp"],
+    )
+    from pathlib import Path
+    assert config.root == Path("/custom/root")
+    assert config.include == ["*.md"]
+    assert config.exclude == ["*.tmp"]
+
+
+def test_build_context_plan_with_empty_projects():
+    manifest = {
+        "version": 2,
+        "defaults": {},
+        "projects": {},
+        "repos": {
+            "myrepo": {
+                "root": "/tmp/myrepo",
+                "include": ["*.py"],
+                "exclude": [],
+                "default_tags": [],
+            }
+        },
+        "context_packs": {"default_3_layer": manifest_module.DEFAULT_CONTEXT_PACK},
+    }
+    plan = manifest_module.build_context_plan(
+        manifest=manifest,
+        repo="myrepo",
+        explicit_project=None,
+        pack_name="default_3_layer",
+    )
+    # Should still produce layers, even with no projects
+    assert "layers" in plan
+    assert len(plan["layers"]) > 0
+
+
+def test_build_policy_actions_all_decisions_preserved():
+    items = [
+        {"id": "d1", "memory": "decision one", "metadata": {"category": "decision", "updated_at": "2024-01-01T00:00:00+00:00"}},
+        {"id": "d2", "memory": "decision two", "metadata": {"category": "decision", "updated_at": "2024-06-01T00:00:00+00:00"}},
+    ]
+    policy = ingest_module.build_policy_actions(items=items, stale_days=45, summary_keep=5)
+    assert "d1" not in policy["delete_ids"]
+    assert "d2" not in policy["delete_ids"]
