@@ -245,7 +245,7 @@ def build_mem0_config(project_id: str) -> dict[str, Any]:
         },
         "embedder": {
             "provider": "huggingface",
-            "config": {"model": "multi-qa-MiniLM-L6-cos-v1"},
+            "config": {"model": "BAAI/bge-large-en-v1.5"},
         },
         "vector_store": {
             "provider": "chroma",

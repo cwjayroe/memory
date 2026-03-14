@@ -45,7 +45,7 @@ from manifest import (
     write_manifest,
 )
 from helpers import (
-    dedupe_keep_order as _dedupe_keep_order,
+    dedupe_keep_order,
     get_all_items,
     normalize_strings,
     normalize_tags,
@@ -520,8 +520,8 @@ def _run_project_init(request: ProjectInitRequest) -> None:
         raise ValueError("--repos must include at least one repo name")
 
     existing = _safe_dict(projects.get(request.project))
-    merged_repos = _dedupe_keep_order(normalize_strings(existing.get("repos")) + request.repos)
-    merged_tags = _dedupe_keep_order(normalize_tags(existing.get("tags")) + request.tags or [request.project])
+    merged_repos = dedupe_keep_order(normalize_strings(existing.get("repos")) + request.repos)
+    merged_tags = dedupe_keep_order(normalize_tags(existing.get("tags")) + request.tags or [request.project])
     projects[request.project] = {
         "description": request.description or existing.get("description", ""),
         "tags": merged_tags,

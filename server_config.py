@@ -22,7 +22,7 @@ class ServerConfig:
     global_timeout_seconds: float = 20.0
     cache_ttl_seconds: float = 60.0
     cache_max_entries: int = 128
-    reranker_model_name: str = "BAAI/bge-reranker-base"
+    reranker_model_name: str = "BAAI/bge-reranker-v2-m3"
 
     @classmethod
     def from_env(cls) -> "ServerConfig":
@@ -69,7 +69,7 @@ class ServerConfig:
                 os.environ.get("PROJECT_MEMORY_CACHE_MAX_ENTRIES", "128")
             ),
             reranker_model_name=os.environ.get(
-                "PROJECT_MEMORY_RERANKER_MODEL", "BAAI/bge-reranker-base"
+                "PROJECT_MEMORY_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"
             ),
         )
 
