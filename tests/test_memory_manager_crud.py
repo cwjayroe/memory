@@ -120,6 +120,7 @@ def test_list_memories_filters_and_paginates(monkeypatch):
         },
     ]
 
+    monkeypatch.setattr(mcp_module.mem_manager, "_get_metadata_store", lambda _project_id: None)
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
     memory.all_results = list(all_memories)
 
@@ -146,6 +147,7 @@ def test_list_memories_filters_and_paginates(monkeypatch):
 def test_list_memories_no_results_message(monkeypatch):
     memory = _FakeMemory()
 
+    monkeypatch.setattr(mcp_module.mem_manager, "_get_metadata_store", lambda _project_id: None)
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
     memory.all_results = []
 
@@ -199,6 +201,7 @@ def test_list_memories_sorts_by_parsed_updated_at_with_fallback(monkeypatch):
         },
     ]
 
+    monkeypatch.setattr(mcp_module.mem_manager, "_get_metadata_store", lambda _project_id: None)
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
     memory.all_results = list(all_memories)
 
@@ -240,6 +243,7 @@ def test_list_memories_json_mode_and_full_text_respects_pagination(monkeypatch):
             },
         },
     ]
+    monkeypatch.setattr(mcp_module.mem_manager, "_get_metadata_store", lambda _project_id: None)
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
 
     text = _run_tool(
@@ -428,6 +432,7 @@ def test_get_stats_returns_aggregate(monkeypatch):
             },
         },
     ]
+    monkeypatch.setattr(mcp_module.mem_manager, "_get_metadata_store", lambda _project_id: None)
     monkeypatch.setattr(mcp_module.mem_manager, "get_memory", lambda _project_id, **_kw: memory)
 
     result = _run_tool(mcp_module, "get_stats", {"project_id": "proj"})

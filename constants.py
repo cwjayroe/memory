@@ -12,3 +12,5 @@ MIN_EXCERPT_CHARS = 120
 MAX_EXCERPT_CHARS = 4000
 DEFAULT_RESPONSE_FORMAT = "text"
 ALLOWED_RESPONSE_FORMATS = frozenset({"text", "json"})
+SQLITE_ENABLED = os.environ.get("PROJECT_MEMORY_SQLITE_ENABLED", "true").lower() in ("1", "true", "yes")
+SQLITE_WAL_MODE = os.environ.get("PROJECT_MEMORY_SQLITE_WAL", "true").lower() in ("1", "true", "yes")

@@ -763,6 +763,202 @@ async def _handle_summarize_scope(arguments: dict[str, Any]) -> list[TextContent
     return [TextContent(type="text", text=f"Summary for project={project_id}:\n\n{summary}")]
 
 
+async def _handle_link_memories(arguments: dict[str, Any]) -> list[TextContent]:
+    from memory_types import LinkMemoriesRequest
+
+    req = LinkMemoriesRequest.from_arguments(arguments, default_project_id=DEFAULT_PROJECT_ID)
+    if not req.source_id or not req.target_id:
+        return [TextContent(type="text", text="source_id and target_id are required.")]
+    store = mem_manager._get_metadata_store(req.project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available. Enable PROJECT_MEMORY_SQLITE_ENABLED=true.")]
+    store.add_relation(req.source_id, req.target_id, req.relation, req.confidence, created_by="user")
+    return [TextContent(type="text", text=f"Linked {req.source_id} --[{req.relation}]--> {req.target_id} (confidence={req.confidence})")]
+
+
+async def _handle_get_related(arguments: dict[str, Any]) -> list[TextContent]:
+    from memory_types import GetRelatedRequest
+
+    req = GetRelatedRequest.from_arguments(arguments, default_project_id=DEFAULT_PROJECT_ID)
+    if not req.memory_id:
+        return [TextContent(type="text", text="memory_id is required.")]
+    store = mem_manager._get_metadata_store(req.project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    related = store.get_related(req.memory_id, max_hops=req.max_hops, relation_types=req.relation_types or None)
+    if not related:
+        return [TextContent(type="text", text=f"No related memories found for {req.memory_id}.")]
+    if req.response_format == "json":
+        return [TextContent(type="text", text=json.dumps(related, indent=2))]
+    lines = [f"Related memories for {req.memory_id} ({len(related)} found):"]
+    for r in related:
+        mem = r["memory"]
+        lines.append(f"  [{' -> '.join(r['path'])}] (hops={r['hops']}) {mem.get('id', '?')}: {mem.get('body', '')[:200]}")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+async def _handle_list_entities(arguments: dict[str, Any]) -> list[TextContent]:
+    from memory_types import ListEntitiesRequest
+
+    req = ListEntitiesRequest.from_arguments(arguments, default_project_id=DEFAULT_PROJECT_ID)
+    store = mem_manager._get_metadata_store(req.project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    conn = store._get_conn()
+    conditions = ["project_id = ?"]
+    params: list = [req.project_id]
+    if req.kind:
+        conditions.append("kind = ?")
+        params.append(req.kind)
+    where = " AND ".join(conditions)
+    params.append(req.limit)
+    cur = conn.execute(f"SELECT id, name, kind FROM entities WHERE {where} ORDER BY name LIMIT ?", params)
+    entities = [{"id": r[0], "name": r[1], "kind": r[2]} for r in cur.fetchall()]
+    if req.response_format == "json":
+        return [TextContent(type="text", text=json.dumps(entities, indent=2))]
+    if not entities:
+        return [TextContent(type="text", text="No entities found.")]
+    lines = [f"Entities ({len(entities)}):"]
+    for e in entities:
+        lines.append(f"  [{e['kind']}] {e['name']}")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+async def _handle_search_by_entity(arguments: dict[str, Any]) -> list[TextContent]:
+    from memory_types import SearchByEntityRequest
+
+    req = SearchByEntityRequest.from_arguments(arguments, default_project_id=DEFAULT_PROJECT_ID)
+    if not req.entity_name:
+        return [TextContent(type="text", text="entity_name is required.")]
+    store = mem_manager._get_metadata_store(req.project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    memory_ids = store.find_memories_by_entity(req.entity_name, req.entity_kind)
+    if not memory_ids:
+        return [TextContent(type="text", text=f"No memories found for entity '{req.entity_name}'.")]
+    items = []
+    for mid in memory_ids[:20]:
+        mem = store.get_memory(mid)
+        if mem:
+            items.append(mem)
+    if req.response_format == "json":
+        return [TextContent(type="text", text=json.dumps(items, indent=2))]
+    lines = [f"Memories for entity '{req.entity_name}' ({len(memory_ids)} total):"]
+    for item in items:
+        lines.append(f"  {item.get('id', '?')}: {item.get('body', '')[:200]}")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+async def _handle_get_memory_history(arguments: dict[str, Any]) -> list[TextContent]:
+    from memory_types import GetMemoryHistoryRequest
+
+    req = GetMemoryHistoryRequest.from_arguments(arguments, default_project_id=DEFAULT_PROJECT_ID)
+    if not req.memory_id:
+        return [TextContent(type="text", text="memory_id is required.")]
+    store = mem_manager._get_metadata_store(req.project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    versions = store.get_versions(req.memory_id)
+    if not versions:
+        return [TextContent(type="text", text=f"No version history for {req.memory_id}.")]
+    if req.response_format == "json":
+        return [TextContent(type="text", text=json.dumps(versions, indent=2))]
+    lines = [f"Version history for {req.memory_id} ({len(versions)} versions):"]
+    for v in versions:
+        lines.append(f"  v{v['version']} ({v['changed_at']}, {v.get('change_source', '?')}): {v['body'][:150]}")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+async def _handle_extract_entities(arguments: dict[str, Any]) -> list[TextContent]:
+    from memory_types import ExtractEntitiesRequest
+    from entity_extraction import extract_and_link
+
+    req = ExtractEntitiesRequest.from_arguments(arguments, default_project_id=DEFAULT_PROJECT_ID)
+    store = mem_manager._get_metadata_store(req.project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    total_linked = 0
+    if req.memory_id:
+        mem = store.get_memory(req.memory_id)
+        if mem:
+            count = extract_and_link(mem["body"], req.memory_id, store, req.project_id)
+            total_linked += count
+    else:
+        items, total_count = store.list_memories(limit=500)
+        for item in items:
+            mid = item.get("id")
+            if mid:
+                count = extract_and_link(item.get("body", ""), mid, store, req.project_id)
+                total_linked += count
+    return [TextContent(type="text", text=f"Extracted and linked {total_linked} entities for project={req.project_id}.")]
+
+
+async def _handle_migrate_to_sqlite(arguments: dict[str, Any]) -> list[TextContent]:
+    project_id = str(arguments.get("project_id") or DEFAULT_PROJECT_ID).strip()
+    store = mem_manager._get_metadata_store(project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    all_items = mem_manager.get_all_items(project_id)
+    store.migrate_from_items(all_items, project_id)
+    return [TextContent(type="text", text=f"Migrated {len(all_items)} memories to SQLite for project={project_id}.")]
+
+
+async def _handle_consolidate_memories(arguments: dict[str, Any]) -> list[TextContent]:
+    from consolidation import run_consolidation
+
+    default_project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID).strip()
+    project_id = default_project_id
+    store = mem_manager._get_metadata_store(project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    category = arguments.get("category")
+    entity = arguments.get("entity")
+    dry_run = arguments.get("dry_run", True)
+    if isinstance(dry_run, str):
+        dry_run = dry_run.lower() not in ("false", "0", "no")
+    actions = run_consolidation(store, project_id, category=category, entity=entity, dry_run=dry_run)
+    if not actions:
+        return [TextContent(type="text", text="No clusters found for consolidation.")]
+    if arguments.get("response_format") == "json":
+        result_data = [{"cluster_id": a.cluster_id, "memory_ids": a.memory_ids, "shared_entities": a.shared_entities, "action": a.action, "summary_preview": a.summary_preview} for a in actions]
+        return [TextContent(type="text", text=json.dumps(result_data, indent=2))]
+    lines = [f"Consolidation results ({len(actions)} clusters):"]
+    for a in actions:
+        lines.append(f"  [{a.action}] {a.cluster_id}: {len(a.memory_ids)} memories, entities={a.shared_entities[:3]}")
+        if a.summary_preview:
+            lines.append(f"    Preview: {a.summary_preview[:150]}")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+async def _handle_detect_duplicates(arguments: dict[str, Any]) -> list[TextContent]:
+    from consolidation import ConsolidationEngine
+
+    default_project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID).strip()
+    project_id = default_project_id
+    store = mem_manager._get_metadata_store(project_id)
+    if store is None:
+        return [TextContent(type="text", text="SQLite store not available.")]
+    threshold = 0.92
+    try:
+        threshold = max(0.5, min(float(arguments.get("threshold", 0.92)), 1.0))
+    except (TypeError, ValueError):
+        pass
+    category = arguments.get("category")
+    engine = ConsolidationEngine(store)
+    groups = engine.detect_near_duplicates(project_id, threshold=threshold, category=category)
+    if not groups:
+        return [TextContent(type="text", text="No near-duplicates found.")]
+    if arguments.get("response_format") == "json":
+        result_data = [{"memory_ids": g.memory_ids, "similarity": g.similarity, "repo": g.repo, "category": g.category} for g in groups]
+        return [TextContent(type="text", text=json.dumps(result_data, indent=2))]
+    lines = [f"Near-duplicate groups ({len(groups)}):"]
+    for g in groups:
+        lines.append(f"  [{g.category or 'unknown'}] {len(g.memory_ids)} memories, similarity={g.similarity:.2f}, repo={g.repo or 'unknown'}")
+        for mid in g.memory_ids[:3]:
+            lines.append(f"    - {mid}")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "search_context":
@@ -807,6 +1003,24 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _handle_context_plan(arguments)
     elif name == "policy_run":
         return await _handle_policy_run(arguments)
+    elif name == "link_memories":
+        return await _handle_link_memories(arguments)
+    elif name == "get_related":
+        return await _handle_get_related(arguments)
+    elif name == "list_entities":
+        return await _handle_list_entities(arguments)
+    elif name == "search_by_entity":
+        return await _handle_search_by_entity(arguments)
+    elif name == "get_memory_history":
+        return await _handle_get_memory_history(arguments)
+    elif name == "extract_entities":
+        return await _handle_extract_entities(arguments)
+    elif name == "migrate_to_sqlite":
+        return await _handle_migrate_to_sqlite(arguments)
+    elif name == "consolidate_memories":
+        return await _handle_consolidate_memories(arguments)
+    elif name == "detect_duplicates":
+        return await _handle_detect_duplicates(arguments)
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -1325,6 +1539,123 @@ async def list_tools() -> list[Tool]:
                     "repo": {"type": "string", "description": "Filter summary to a specific repo"},
                     "category": {"type": "string", "description": "Filter summary to a specific category"},
                     "max_tokens": {"type": "integer", "default": 800},
+                },
+            },
+        ),
+        Tool(
+            name="link_memories",
+            description="Create an explicit relationship between two memories. Supported relations: supersedes, implements, depends_on, related_to, contradicts, refines.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source_id": {"type": "string", "description": "Source memory ID"},
+                    "target_id": {"type": "string", "description": "Target memory ID"},
+                    "relation": {"type": "string", "enum": ["supersedes", "implements", "depends_on", "related_to", "contradicts", "refines"], "default": "related_to"},
+                    "project_id": {"type": "string"},
+                    "confidence": {"type": "number", "default": 1.0, "description": "Confidence score 0.0-1.0"},
+                },
+                "required": ["source_id", "target_id"],
+            },
+        ),
+        Tool(
+            name="get_related",
+            description="Get memories related to a given memory through the knowledge graph. Traverses relationship edges up to max_hops.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "max_hops": {"type": "integer", "default": 1, "description": "Max traversal depth (1-3)"},
+                    "relation_types": {"type": "array", "items": {"type": "string"}, "description": "Filter by relation type"},
+                    "response_format": {"type": "string", "enum": ["text", "json"], "default": "text"},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="list_entities",
+            description="List known entities extracted from memories in this scope.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "kind": {"type": "string", "description": "Filter by entity kind: service, api, module, pattern, concept, tool, file"},
+                    "limit": {"type": "integer", "default": 50},
+                    "response_format": {"type": "string", "enum": ["text", "json"], "default": "text"},
+                },
+            },
+        ),
+        Tool(
+            name="search_by_entity",
+            description="Find all memories that mention a specific entity.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_name": {"type": "string"},
+                    "entity_kind": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "response_format": {"type": "string", "enum": ["text", "json"], "default": "text"},
+                },
+                "required": ["entity_name"],
+            },
+        ),
+        Tool(
+            name="get_memory_history",
+            description="Get the version history of a memory, showing how it changed over time.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "response_format": {"type": "string", "enum": ["text", "json"], "default": "text"},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="extract_entities",
+            description="Extract and link entities from a specific memory or all memories in scope. Builds the knowledge graph.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "memory_id": {"type": "string", "description": "Specific memory to extract from. If omitted, processes all memories."},
+                },
+            },
+        ),
+        Tool(
+            name="migrate_to_sqlite",
+            description="Migrate existing ChromaDB data to SQLite metadata store. Safe to run multiple times.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                },
+            },
+        ),
+        Tool(
+            name="consolidate_memories",
+            description="Find clusters of related memories and optionally consolidate them into summaries. Uses the knowledge graph to find related memories sharing entities.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "category": {"type": "string", "description": "Filter clusters to a specific category"},
+                    "entity": {"type": "string", "description": "Find memories related to a specific entity"},
+                    "dry_run": {"type": "boolean", "default": True, "description": "If true, only report what would be consolidated without making changes"},
+                },
+            },
+        ),
+        Tool(
+            name="detect_duplicates",
+            description="Find near-duplicate memories using text similarity. Reports groups of memories with >92% similarity.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "threshold": {"type": "number", "default": 0.92, "description": "Similarity threshold 0.0-1.0"},
+                    "category": {"type": "string", "description": "Filter to a specific category"},
+                    "response_format": {"type": "string", "enum": ["text", "json"], "default": "text"},
                 },
             },
         ),

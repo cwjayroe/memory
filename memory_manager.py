@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -16,8 +17,10 @@ from scoring import (  # type: ignore
 from constants import (  # type: ignore
     DEFAULT_PROJECT_ID,
     GET_ALL_LIMIT,
+    SQLITE_ENABLED,
 )
-from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem  # type: ignore
+from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem, MemoryMetadata  # type: ignore
+from sqlite_store import MetadataStore  # type: ignore
 from server_config import ServerConfig  # type: ignore
 from helpers import _is_transient_memory_init_error, _find_ids, _coerce_memory_item, _matches_filters, get_all_items, parse_datetime, utc_now, results_from_payload, build_mem0_config  # type: ignore
 
@@ -39,6 +42,9 @@ class MemoryManager:
         self._logger = logger
         self._default_project_id = default_project_id
         self._get_all_limit = get_all_limit
+        self._sqlite_enabled = SQLITE_ENABLED
+        self._metadata_stores: dict[str, MetadataStore] = {}
+        self._metadata_store_lock = threading.Lock()
         self._memory_cache: dict[str, Memory] = {}
         self._memory_cache_lock = threading.Lock()
         self._search_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
@@ -57,6 +63,25 @@ class MemoryManager:
     def _clear_cache_entry(self, project_id: str) -> None:
         with self._memory_cache_lock:
             self._memory_cache.pop(project_id, None)
+
+    def _get_metadata_store(self, project_id: str) -> MetadataStore | None:
+        if not self._sqlite_enabled:
+            return None
+        with self._metadata_store_lock:
+            store = self._metadata_stores.get(project_id)
+            if store is not None:
+                return store
+            try:
+                store = MetadataStore(project_id)
+                self._metadata_stores[project_id] = store
+                return store
+            except Exception:
+                self._logger.warning(
+                    "Failed to initialize SQLite store for project=%s",
+                    project_id,
+                    exc_info=True,
+                )
+                return None
 
     def get_memory(
         self,
@@ -158,6 +183,34 @@ class MemoryManager:
         )
         stored = results_from_payload(result)
         stored_ids = [item.id for item in stored if isinstance(item.id, str)]
+
+        store = self._get_metadata_store(request.project_id)
+        if store is not None:
+            for del_id in delete_ids:
+                try:
+                    store.delete_memory(del_id)
+                except Exception:
+                    self._logger.debug("SQLite delete for %s failed", del_id, exc_info=True)
+            for item in stored:
+                if item.id:
+                    try:
+                        store.upsert_memory(item.id, request.content, metadata)
+                    except Exception:
+                        self._logger.debug("SQLite upsert for %s failed", item.id, exc_info=True)
+            for item in stored:
+                if item.id:
+                    try:
+                        from entity_extraction import extract_and_link
+                        extract_and_link(
+                            request.content,
+                            item.id,
+                            store,
+                            request.project_id,
+                            tag_vocab=request.tags if request.tags else None,
+                        )
+                    except Exception:
+                        self._logger.debug("Entity extraction for %s failed", item.id, exc_info=True)
+
         return len(delete_ids), stored_ids
 
     def list_memories(
@@ -165,6 +218,37 @@ class MemoryManager:
         request: ListMemoriesRequest,
     ) -> tuple[list[MemoryItem], int]:
         """Filter, sort, and paginate memories. Returns (page, total_matches)."""
+        store = self._get_metadata_store(request.project_id)
+        if store is not None:
+            try:
+                raw_items, total = store.list_memories(
+                    repo=request.repo,
+                    category=request.category,
+                    tag=request.tag,
+                    path_prefix=request.path_prefix,
+                    sort_by=getattr(request, "sort_by", "updated_at"),
+                    sort_order=getattr(request, "sort_order", "desc"),
+                    offset=request.offset,
+                    limit=request.limit,
+                )
+                items = []
+                for raw in raw_items:
+                    md_dict = raw.get("metadata", {})
+                    md_dict["project_id"] = raw.get("project_id", request.project_id)
+                    md_dict["updated_at"] = raw.get("updated_at")
+                    items.append(MemoryItem(
+                        id=raw.get("id"),
+                        memory=raw.get("body", ""),
+                        metadata=MemoryMetadata.from_dict(md_dict),
+                    ))
+                return items, total
+            except Exception:
+                self._logger.warning(
+                    "SQLite list_memories failed for project=%s, falling back to ChromaDB",
+                    request.project_id,
+                    exc_info=True,
+                )
+
         memory = self.get_memory(request.project_id)
         all_memories = get_all_items(
             memory, request.project_id, limit=self._get_all_limit
@@ -213,6 +297,26 @@ class MemoryManager:
     ) -> MemoryItem | None:
         if not memory_id:
             return None
+
+        store = self._get_metadata_store(project_id)
+        if store is not None:
+            try:
+                raw = store.get_memory(memory_id)
+                if raw is not None:
+                    md_dict = raw.get("metadata", {})
+                    md_dict["project_id"] = raw.get("project_id", project_id)
+                    md_dict["updated_at"] = raw.get("updated_at")
+                    return MemoryItem(
+                        id=raw.get("id"),
+                        memory=raw.get("body", ""),
+                        metadata=MemoryMetadata.from_dict(md_dict),
+                    )
+            except Exception:
+                self._logger.warning(
+                    "SQLite get_memory failed for id=%s, falling back to ChromaDB",
+                    memory_id,
+                    exc_info=True,
+                )
 
         memory = self.get_memory(project_id)
         all_memories = get_all_items(memory, project_id, limit=self._get_all_limit)
@@ -265,7 +369,18 @@ class MemoryManager:
             existing_md["priority"] = request.priority
         existing_md["updated_at"] = utc_now()
 
-        # Delete old, re-add with new content and metadata
+        store = self._get_metadata_store(request.project_id)
+        if store is not None:
+            try:
+                store.save_version(
+                    request.memory_id,
+                    item.memory,
+                    json.dumps(item.metadata.as_dict()),
+                    change_source="update",
+                )
+            except Exception:
+                self._logger.debug("SQLite save_version failed for %s", request.memory_id, exc_info=True)
+
         memory.delete(request.memory_id)
         result = memory.add(
             new_body, agent_id=request.project_id, metadata=existing_md, infer=False
@@ -274,6 +389,18 @@ class MemoryManager:
 
         stored = results_from_payload(result)
         new_ids = [i.id for i in stored if isinstance(i.id, str)]
+
+        if store is not None:
+            try:
+                store.delete_memory(request.memory_id)
+            except Exception:
+                self._logger.debug("SQLite delete for update %s failed", request.memory_id, exc_info=True)
+            for nid in new_ids:
+                try:
+                    store.upsert_memory(nid, new_body, existing_md)
+                except Exception:
+                    self._logger.debug("SQLite upsert for update %s failed", nid, exc_info=True)
+
         return (
             True,
             f"Updated memory project={request.project_id} new_id={','.join(new_ids) if new_ids else 'n/a'}",
@@ -286,6 +413,20 @@ class MemoryManager:
         repo: str | None = None,
     ) -> dict[str, Any]:
         """Return aggregate statistics for a scope without touching embeddings."""
+        store = self._get_metadata_store(project_id)
+        if store is not None and repo is None:
+            try:
+                stats = store.get_stats()
+                stats["project_id"] = project_id
+                stats["repo_filter"] = None
+                return stats
+            except Exception:
+                self._logger.warning(
+                    "SQLite get_stats failed for project=%s, falling back to ChromaDB",
+                    project_id,
+                    exc_info=True,
+                )
+
         all_items = self.get_all_items(project_id)
 
         category_counts: dict[str, int] = {}
@@ -441,9 +582,16 @@ class MemoryManager:
     ) -> tuple[str, int]:
         """Delete by ID or upsert_key. Returns (description, deleted_count)."""
         memory = self.get_memory(request.project_id)
+        store: MetadataStore | None = None
 
         if request.memory_id:
             memory.delete(request.memory_id)
+            store = self._get_metadata_store(request.project_id)
+            if store is not None:
+                try:
+                    store.delete_memory(request.memory_id)
+                except Exception:
+                    self._logger.debug("SQLite delete for %s failed", request.memory_id, exc_info=True)
             return (
                 f"Deleted memory_id={request.memory_id} from project={request.project_id}.",
                 1,
@@ -456,6 +604,14 @@ class MemoryManager:
             ids = _find_ids(all_memories, upsert_key=request.upsert_key)
             for item_id in ids:
                 memory.delete(item_id)
+            if store is None:
+                store = self._get_metadata_store(request.project_id)
+            if store is not None:
+                for item_id in ids:
+                    try:
+                        store.delete_memory(item_id)
+                    except Exception:
+                        self._logger.debug("SQLite delete for %s failed", item_id, exc_info=True)
             return (
                 f"Deleted {len(ids)} memories with upsert_key={request.upsert_key} from project={request.project_id}.",
                 len(ids),
@@ -559,9 +715,45 @@ class MemoryManager:
         token_budget = request.token_budget or self._config.default_token_budget
         candidate_pool = request.candidate_pool or self._config.max_candidate_pool
 
+        expanded_query = request.query
+        store = self._get_metadata_store(request.project_ids[0] if request.project_ids else self._default_project_id)
+        if store is not None:
+            try:
+                query_tokens = set(request.query.lower().split())
+                conn = store._get_conn()
+                cur = conn.execute(
+                    "SELECT DISTINCT name FROM entities WHERE project_id = ?",
+                    (store.project_id,),
+                )
+                known_entities = {r[0] for r in cur.fetchall()}
+                matched = query_tokens & known_entities
+                if matched:
+                    related_names: set[str] = set()
+                    for entity_name in matched:
+                        cur = conn.execute(
+                            """
+                            SELECT DISTINCT e2.name
+                            FROM entities e1
+                            JOIN memory_entities me1 ON me1.entity_id = e1.id
+                            JOIN memory_entities me2 ON me2.memory_id = me1.memory_id AND me2.entity_id != me1.entity_id
+                            JOIN entities e2 ON e2.id = me2.entity_id
+                            WHERE e1.name = ? AND e1.project_id = ?
+                            LIMIT 5
+                            """,
+                            (entity_name, store.project_id),
+                        )
+                        for r in cur.fetchall():
+                            related_names.add(r[0])
+                    if related_names:
+                        expansion = " ".join(related_names - query_tokens)
+                        if expansion:
+                            expanded_query = f"{request.query} {expansion}"
+            except Exception:
+                self._logger.debug("Query expansion failed", exc_info=True)
+
         self._warm_memory_handles(request.project_ids)
         project_results = await self._collect_project_searches(
-            request.project_ids, request.query, candidate_pool
+            request.project_ids, expanded_query, candidate_pool
         )
         # Parse date range filters once
         after_date = parse_datetime(getattr(request, "after_date", None))
@@ -618,6 +810,49 @@ class MemoryManager:
                 rerank_top_n,
             )
         finalized = self._scoring_engine.finalize_scores(scored_candidates)
+        store = self._get_metadata_store(request.project_ids[0] if request.project_ids else self._default_project_id)
+        if store is not None and finalized:
+            try:
+                existing_ids = {item.get("id") for item in finalized if item.get("id")}
+                graph_candidates: list[dict[str, Any]] = []
+                expansion_limit = min(5, len(finalized))
+                for top_item in finalized[:expansion_limit]:
+                    top_id = top_item.get("id")
+                    if not top_id:
+                        continue
+                    related = store.get_related(
+                        top_id,
+                        max_hops=1,
+                        relation_types=["related_to", "implements", "depends_on"],
+                    )
+                    for rel in related:
+                        rel_mem = rel.get("memory", {})
+                        rel_id = rel_mem.get("id")
+                        if rel_id and rel_id not in existing_ids:
+                            existing_ids.add(rel_id)
+                            graph_item = {
+                                "id": rel_id,
+                                "memory": rel_mem.get("body", ""),
+                                "metadata": rel_mem.get("metadata", {}),
+                                "_project_id": rel_mem.get("project_id", request.project_ids[0] if request.project_ids else self._default_project_id),
+                                "score": 0.0,
+                                "_score_components": {
+                                    "vector_component": 0.0,
+                                    "lexical_component": 0.0,
+                                    "metadata_component": 0.0,
+                                    "recency_component": 0.0,
+                                    "rerank_component": 0.0,
+                                    "graph_component": 0.8 / rel["hops"],
+                                    "access_component": 0.0,
+                                    "final_score": 0.0,
+                                },
+                            }
+                            graph_candidates.append(graph_item)
+                if graph_candidates:
+                    finalized.extend(graph_candidates)
+                    finalized = self._scoring_engine.finalize_scores(finalized)
+            except Exception:
+                self._logger.debug("Graph expansion failed", exc_info=True)
         packed = self._scoring_engine.pack_candidates(
             finalized, limit=request.limit, token_budget=token_budget
         )

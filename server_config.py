@@ -23,6 +23,8 @@ class ServerConfig:
     cache_ttl_seconds: float = 60.0
     cache_max_entries: int = 128
     reranker_model_name: str = "BAAI/bge-reranker-v2-m3"
+    sqlite_enabled: bool = True
+    sqlite_wal_mode: bool = True
 
     @classmethod
     def from_env(cls) -> "ServerConfig":
@@ -71,5 +73,11 @@ class ServerConfig:
             reranker_model_name=os.environ.get(
                 "PROJECT_MEMORY_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"
             ),
+            sqlite_enabled=os.environ.get(
+                "PROJECT_MEMORY_SQLITE_ENABLED", "true"
+            ).lower() in ("1", "true", "yes"),
+            sqlite_wal_mode=os.environ.get(
+                "PROJECT_MEMORY_SQLITE_WAL", "true"
+            ).lower() in ("1", "true", "yes"),
         )
 

@@ -29,11 +29,13 @@ class ScoringWeights:
     eliminating the prior duplication of weight constants.
     """
 
-    vector: float = 0.30
-    lexical: float = 0.20
-    metadata: float = 0.15
-    recency: float = 0.10
-    rerank: float = 0.25
+    vector: float = 0.25
+    lexical: float = 0.18
+    metadata: float = 0.12
+    recency: float = 0.08
+    rerank: float = 0.22
+    graph: float = 0.10
+    access: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -132,6 +134,32 @@ def lexical_components(query: str, candidates: list[dict[str, Any]]) -> list[flo
     return overlap_scores
 
 
+def fts5_lexical_components(
+    query: str,
+    candidates: list[dict[str, Any]],
+    metadata_store: Any | None = None,
+) -> list[float] | None:
+    if metadata_store is None:
+        return None
+    try:
+        fts_results = metadata_store.fts_search(query, limit=200)
+        if not fts_results:
+            return None
+        fts_scores: dict[str, float] = {}
+        for memory_id, rank in fts_results:
+            fts_scores[memory_id] = abs(rank)
+
+        raw_values: list[float] = []
+        for item in candidates:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            mid = item.get("id") or metadata.get("id", "")
+            raw_values.append(fts_scores.get(mid, 0.0))
+        return normalize_score_values(raw_values)
+    except Exception:
+        LOGGER.debug("FTS5 scoring failed, will use BM25 fallback", exc_info=True)
+        return None
+
+
 def recency_component(memory_item: dict[str, Any], now_utc: datetime) -> float:
     metadata = get_metadata(memory_item)
     updated_at = parse_datetime(metadata.get("updated_at"))
@@ -139,6 +167,19 @@ def recency_component(memory_item: dict[str, Any], now_utc: datetime) -> float:
         return 0.2
     age_days = max((now_utc - updated_at).total_seconds() / 86400.0, 0.0)
     return 0.5 ** (age_days / 30.0)
+
+
+def access_component(memory_item: dict[str, Any], metadata_store: Any | None = None) -> float:
+    if metadata_store is None:
+        return 0.0
+    mid = memory_item.get("id")
+    if not mid:
+        return 0.0
+    try:
+        count = metadata_store.access_count(mid, days=30)
+        return min(1.0, math.log1p(count) / math.log1p(20))
+    except Exception:
+        return 0.0
 
 
 def dedupe_key(memory_item: dict[str, Any], default_project_id: str = DEFAULT_PROJECT_ID) -> str:
@@ -248,11 +289,13 @@ class ScoringEngine:
         reranker: RerankerManager | None = None,
         packing: PackingConfig | None = None,
         default_project_id: str = DEFAULT_PROJECT_ID,
+        metadata_store: Any | None = None,
     ):
         self.weights = weights or ScoringWeights()
         self.reranker = reranker or RerankerManager("BAAI/bge-reranker-base")
         self.packing = packing or PackingConfig()
         self._default_project_id = default_project_id
+        self._metadata_store = metadata_store
 
     def _metadata_component(
         self,
@@ -309,7 +352,7 @@ class ScoringEngine:
 
         w = self.weights
         now_utc = datetime.now(timezone.utc)
-        lexical = lexical_components(query, candidates)
+        lexical = fts5_lexical_components(query, candidates, self._metadata_store) or lexical_components(query, candidates)
         pre_scores: list[float] = []
 
         for idx, item in enumerate(candidates):
@@ -326,11 +369,13 @@ class ScoringEngine:
                 categories=categories,
             )
             recency_comp = recency_component(item, now_utc)
+            access_comp = access_component(item, self._metadata_store)
             pre_score = (
                 w.vector * vector_comp
                 + w.lexical * lexical_comp
                 + w.metadata * metadata_comp
                 + w.recency * recency_comp
+                + w.access * access_comp
             )
             pre_scores.append(pre_score)
             item["_pre_rerank_score"] = pre_score
@@ -340,6 +385,8 @@ class ScoringEngine:
                 "metadata_component": metadata_comp,
                 "recency_component": recency_comp,
                 "rerank_component": 0.0,
+                "access_component": access_comp,
+                "graph_component": 0.0,
                 "final_score": 0.0,
             }
 
@@ -368,6 +415,8 @@ class ScoringEngine:
                 + w.metadata * float(components.get("metadata_component", 0.0))
                 + w.recency * float(components.get("recency_component", 0.0))
                 + w.rerank * float(components.get("rerank_component", 0.0))
+                + w.graph * float(components.get("graph_component", 0.0))
+                + w.access * float(components.get("access_component", 0.0))
             )
             components["final_score"] = final_score
             item["_score_components"] = components

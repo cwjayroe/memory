@@ -598,3 +598,114 @@ class PolicyRunRequest:
             repo=optional_str(args.repo),
             path_prefix=optional_str(args.path_prefix),
         )
+
+
+@dataclass(frozen=True)
+class LinkMemoriesRequest:
+    project_id: str
+    source_id: str
+    target_id: str
+    relation: str
+    confidence: float = 1.0
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "LinkMemoriesRequest":
+        relation = str(arguments.get("relation", "related_to")).strip()
+        valid_relations = {"supersedes", "implements", "depends_on", "related_to", "contradicts", "refines"}
+        if relation not in valid_relations:
+            relation = "related_to"
+        confidence_raw = arguments.get("confidence", 1.0)
+        try:
+            confidence = max(0.0, min(float(confidence_raw), 1.0))
+        except (TypeError, ValueError):
+            confidence = 1.0
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            source_id=str(arguments.get("source_id", "")).strip(),
+            target_id=str(arguments.get("target_id", "")).strip(),
+            relation=relation,
+            confidence=confidence,
+        )
+
+
+@dataclass(frozen=True)
+class GetRelatedRequest:
+    project_id: str
+    memory_id: str
+    max_hops: int = 1
+    relation_types: list[str] = field(default_factory=list)
+    response_format: str = "text"
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "GetRelatedRequest":
+        max_hops = max(1, min(safe_int(arguments.get("max_hops", 1), 1), 3))
+        relation_types = normalize_strings(arguments.get("relation_types"))
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            memory_id=str(arguments.get("memory_id", "")).strip(),
+            max_hops=max_hops,
+            relation_types=relation_types,
+            response_format=normalize_response_format(arguments.get("response_format")),
+        )
+
+
+@dataclass(frozen=True)
+class ListEntitiesRequest:
+    project_id: str
+    kind: str | None = None
+    limit: int = 50
+    response_format: str = "text"
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "ListEntitiesRequest":
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            kind=optional_str(arguments.get("kind")),
+            limit=max(1, min(safe_int(arguments.get("limit", 50), 50), 200)),
+            response_format=normalize_response_format(arguments.get("response_format")),
+        )
+
+
+@dataclass(frozen=True)
+class SearchByEntityRequest:
+    project_id: str
+    entity_name: str
+    entity_kind: str | None = None
+    response_format: str = "text"
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "SearchByEntityRequest":
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            entity_name=str(arguments.get("entity_name", "")).strip(),
+            entity_kind=optional_str(arguments.get("entity_kind")),
+            response_format=normalize_response_format(arguments.get("response_format")),
+        )
+
+
+@dataclass(frozen=True)
+class GetMemoryHistoryRequest:
+    project_id: str
+    memory_id: str
+    response_format: str = "text"
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "GetMemoryHistoryRequest":
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            memory_id=str(arguments.get("memory_id", "")).strip(),
+            response_format=normalize_response_format(arguments.get("response_format")),
+        )
+
+
+@dataclass(frozen=True)
+class ExtractEntitiesRequest:
+    project_id: str
+    memory_id: str | None = None
+
+    @classmethod
+    def from_arguments(cls, arguments: dict[str, Any], *, default_project_id: str) -> "ExtractEntitiesRequest":
+        return cls(
+            project_id=optional_str(arguments.get("project_id")) or default_project_id,
+            memory_id=optional_str(arguments.get("memory_id")),
+        )
