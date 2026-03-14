@@ -20,10 +20,20 @@ from constants import (  # type: ignore
 from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem  # type: ignore
 from server_config import ServerConfig  # type: ignore
 from helpers import _is_transient_memory_init_error, _find_ids, _coerce_memory_item, _matches_filters, get_all_items, parse_datetime, utc_now, results_from_payload, build_mem0_config  # type: ignore
+from connection_pool import ConnectionPool  # type: ignore
+from cache_backend import CacheBackend, InProcessCache, create_cache_backend  # type: ignore
+from metrics import METRICS, OperationTimer, get_correlation_id  # type: ignore
 
 
 class MemoryManager:
-    """Manages Memory instances, caching, and CRUD operations for project memories."""
+    """Manages Memory instances, caching, and CRUD operations for project memories.
+
+    Enterprise enhancements:
+    - ConnectionPool with LRU eviction replaces simple dict cache
+    - Pluggable CacheBackend (in-process or Redis) for search results
+    - Metrics instrumentation on all operations
+    - Async bulk operations with configurable concurrency
+    """
 
     def __init__(
         self,
@@ -33,30 +43,71 @@ class MemoryManager:
         logger: logging.Logger,
         default_project_id: str = DEFAULT_PROJECT_ID,
         get_all_limit: int = GET_ALL_LIMIT,
+        cache_backend: CacheBackend | None = None,
     ):
         self._config = config
         self._scoring_engine = scoring_engine
         self._logger = logger
         self._default_project_id = default_project_id
         self._get_all_limit = get_all_limit
-        self._memory_cache: dict[str, Memory] = {}
-        self._memory_cache_lock = threading.Lock()
+
+        # Connection pool replaces the old dict cache
+        pool_max = config.pool_max_size if config else 64
+        pool_ttl = config.pool_ttl_seconds if config else 3600.0
+        self._pool = ConnectionPool(
+            factory=self._create_memory_instance,
+            max_size=pool_max,
+            ttl_seconds=pool_ttl,
+            on_evict=self._on_pool_evict,
+        )
+
+        # Search cache: pluggable backend
+        if cache_backend is not None:
+            self._cache = cache_backend
+        elif config is not None:
+            self._cache = create_cache_backend(
+                backend=config.cache_backend,
+                max_entries=config.cache_max_entries,
+                default_ttl=config.cache_ttl_seconds,
+                redis_url=config.redis_url,
+                redis_key_prefix=config.redis_key_prefix,
+            )
+        else:
+            self._cache = InProcessCache()
+
+        # Backwards-compat: keep old OrderedDict interface for tests that
+        # poke at _search_cache directly
         self._search_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
+
+        # Bulk concurrency limit
+        self._bulk_semaphore = asyncio.Semaphore(
+            config.bulk_concurrency if config else 10
+        )
+
+    def _create_memory_instance(self, project_id: str) -> Memory:
+        """Factory for ConnectionPool: create a new Memory for *project_id*."""
+        config = self._config
+        kwargs: dict[str, Any] = {}
+        if config and config.chroma_mode in ("remote", "client"):
+            kwargs["chroma_mode"] = config.chroma_mode
+            kwargs["chroma_host"] = config.chroma_host
+            kwargs["chroma_port"] = config.chroma_port
+            kwargs["chroma_auth_token"] = config.chroma_auth_token
+        return Memory.from_config(build_mem0_config(project_id, **kwargs))
+
+    def _on_pool_evict(self, project_id: str, memory: Memory) -> None:
+        """Callback when a Memory instance is evicted from the pool."""
+        self._logger.debug("Evicted memory instance for project=%s", project_id)
+        METRICS.increment("pool.evictions")
 
     # -- Memory instance lifecycle ------------------------------------------
 
     def _get_memory_uncached(self, project_id: str) -> Memory:
-        with self._memory_cache_lock:
-            existing = self._memory_cache.get(project_id)
-            if existing is not None:
-                return existing
-            memory = Memory.from_config(build_mem0_config(project_id))
-            self._memory_cache[project_id] = memory
-            return memory
+        """Get a Memory instance via the connection pool."""
+        return self._pool.get(project_id)
 
     def _clear_cache_entry(self, project_id: str) -> None:
-        with self._memory_cache_lock:
-            self._memory_cache.pop(project_id, None)
+        self._pool.remove(project_id)
 
     def get_memory(
         self,
@@ -106,104 +157,109 @@ class MemoryManager:
         Pass ``pre_fetched_items`` to skip the internal get_all_items() call (batch
         optimization: fetch once per file, reuse across all chunks).
         """
-        memory = self.get_memory(request.project_id)
+        with OperationTimer("store_duration_ms"):
+            METRICS.increment("store.calls")
+            memory = self.get_memory(request.project_id)
 
-        fingerprint = request.fingerprint
-        if not fingerprint:
-            fingerprint_input = "||".join(
-                [
-                    request.project_id,
-                    str(request.repo or ""),
-                    str(request.source_path or ""),
-                    request.source_kind,
-                    request.content,
-                ]
+            fingerprint = request.fingerprint
+            if not fingerprint:
+                fingerprint_input = "||".join(
+                    [
+                        request.project_id,
+                        str(request.repo or ""),
+                        str(request.source_path or ""),
+                        request.source_kind,
+                        request.content,
+                    ]
+                )
+                fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
+
+            metadata: dict[str, Any] = {
+                "project_id": request.project_id,
+                "category": request.category,
+                "source_kind": request.source_kind,
+                "updated_at": utc_now(),
+                "fingerprint": fingerprint,
+                "priority": getattr(request, "priority", "normal"),
+            }
+            if request.tags:
+                metadata["tags"] = request.tags
+            if request.repo:
+                metadata["repo"] = request.repo
+            if request.source_path:
+                metadata["source_path"] = request.source_path
+            if request.module:
+                metadata["module"] = request.module
+            if request.upsert_key:
+                metadata["upsert_key"] = request.upsert_key
+
+            all_memories = (
+                pre_fetched_items
+                if pre_fetched_items is not None
+                else get_all_items(memory, request.project_id, limit=self._get_all_limit)
             )
-            fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
+            delete_ids = _find_ids(
+                all_memories,
+                upsert_key=request.upsert_key,
+                fingerprint=None if request.upsert_key else fingerprint,
+            )
+            for mid in delete_ids:
+                memory.delete(mid)
 
-        metadata: dict[str, Any] = {
-            "project_id": request.project_id,
-            "category": request.category,
-            "source_kind": request.source_kind,
-            "updated_at": utc_now(),
-            "fingerprint": fingerprint,
-            "priority": getattr(request, "priority", "normal"),
-        }
-        if request.tags:
-            metadata["tags"] = request.tags
-        if request.repo:
-            metadata["repo"] = request.repo
-        if request.source_path:
-            metadata["source_path"] = request.source_path
-        if request.module:
-            metadata["module"] = request.module
-        if request.upsert_key:
-            metadata["upsert_key"] = request.upsert_key
-
-        all_memories = (
-            pre_fetched_items
-            if pre_fetched_items is not None
-            else get_all_items(memory, request.project_id, limit=self._get_all_limit)
-        )
-        delete_ids = _find_ids(
-            all_memories,
-            upsert_key=request.upsert_key,
-            fingerprint=None if request.upsert_key else fingerprint,
-        )
-        for mid in delete_ids:
-            memory.delete(mid)
-
-        result = memory.add(
-            request.content, agent_id=request.project_id, metadata=metadata, infer=False
-        )
-        stored = results_from_payload(result)
-        stored_ids = [item.id for item in stored if isinstance(item.id, str)]
-        return len(delete_ids), stored_ids
+            result = memory.add(
+                request.content, agent_id=request.project_id, metadata=metadata, infer=False
+            )
+            stored = results_from_payload(result)
+            stored_ids = [item.id for item in stored if isinstance(item.id, str)]
+            METRICS.increment("store.memories_stored", len(stored_ids))
+            return len(delete_ids), stored_ids
 
     def list_memories(
         self,
         request: ListMemoriesRequest,
     ) -> tuple[list[MemoryItem], int]:
         """Filter, sort, and paginate memories. Returns (page, total_matches)."""
-        memory = self.get_memory(request.project_id)
-        all_memories = get_all_items(
-            memory, request.project_id, limit=self._get_all_limit
-        )
+        with OperationTimer("list_duration_ms"):
+            METRICS.increment("list.calls")
+            memory = self.get_memory(request.project_id)
+            all_memories = get_all_items(
+                memory, request.project_id, limit=self._get_all_limit
+            )
 
-        filtered: list[MemoryItem] = []
-        for raw_item in all_memories:
-            item = _coerce_memory_item(raw_item)
-            md = item.metadata
-            if request.repo and md.repo != request.repo:
-                continue
-            if request.category and md.category != request.category:
-                continue
-            if request.path_prefix:
-                sp = md.source_path
-                if not sp or not sp.startswith(request.path_prefix):
+            filtered: list[MemoryItem] = []
+            for raw_item in all_memories:
+                item = _coerce_memory_item(raw_item)
+                md = item.metadata
+                if request.repo and md.repo != request.repo:
                     continue
-            if request.tag:
-                if request.tag not in md.tags:
+                if request.category and md.category != request.category:
                     continue
-            filtered.append(item)
+                if request.path_prefix:
+                    sp = md.source_path
+                    if not sp or not sp.startswith(request.path_prefix):
+                        continue
+                if request.tag:
+                    if request.tag not in md.tags:
+                        continue
+                filtered.append(item)
 
-        sort_by = getattr(request, "sort_by", "updated_at")
-        sort_order = getattr(request, "sort_order", "desc")
-        epoch_utc = datetime.fromtimestamp(0, tz=timezone.utc)
+            sort_by = getattr(request, "sort_by", "updated_at")
+            sort_order = getattr(request, "sort_order", "desc")
+            epoch_utc = datetime.fromtimestamp(0, tz=timezone.utc)
 
-        def sort_key(item: MemoryItem) -> Any:
-            md = item.metadata
-            if sort_by in ("updated_at", "created_at"):
+            def sort_key(item: MemoryItem) -> Any:
+                md = item.metadata
+                if sort_by in ("updated_at", "created_at"):
+                    return parse_datetime(md.updated_at) or epoch_utc
+                if sort_by == "category":
+                    return md.category or ""
+                if sort_by == "repo":
+                    return md.repo or ""
                 return parse_datetime(md.updated_at) or epoch_utc
-            if sort_by == "category":
-                return md.category or ""
-            if sort_by == "repo":
-                return md.repo or ""
-            return parse_datetime(md.updated_at) or epoch_utc
 
-        filtered.sort(key=sort_key, reverse=(sort_order != "asc"))
-        page = filtered[request.offset : request.offset + request.limit]
-        return page, len(filtered)
+            filtered.sort(key=sort_key, reverse=(sort_order != "asc"))
+            page = filtered[request.offset : request.offset + request.limit]
+            return page, len(filtered)
 
     def get_memory_item(
         self,
@@ -229,55 +285,57 @@ class MemoryManager:
         """Patch an existing memory's body and/or metadata. Returns (found, message)."""
         from memory_types import VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
 
-        item = self.get_memory_item(
-            project_id=request.project_id, memory_id=request.memory_id
-        )
-        if item is None:
-            return (
-                False,
-                f"Memory not found: project={request.project_id} id={request.memory_id}",
+        with OperationTimer("update_duration_ms"):
+            METRICS.increment("update.calls")
+            item = self.get_memory_item(
+                project_id=request.project_id, memory_id=request.memory_id
+            )
+            if item is None:
+                return (
+                    False,
+                    f"Memory not found: project={request.project_id} id={request.memory_id}",
+                )
+
+            memory = self.get_memory(request.project_id)
+
+            # Build updated body
+            new_body = (
+                request.body.strip()
+                if request.body and request.body.strip()
+                else item.memory
             )
 
-        memory = self.get_memory(request.project_id)
+            # Build patched metadata (merge over existing)
+            existing_md = item.metadata.as_dict()
+            if request.repo is not None:
+                existing_md["repo"] = request.repo
+            if request.source_path is not None:
+                existing_md["source_path"] = request.source_path
+            if request.source_kind is not None:
+                existing_md["source_kind"] = request.source_kind
+            if request.category is not None:
+                existing_md["category"] = request.category
+            if request.module is not None:
+                existing_md["module"] = request.module
+            if request.tags is not None:
+                existing_md["tags"] = request.tags
+            if request.priority is not None:
+                existing_md["priority"] = request.priority
+            existing_md["updated_at"] = utc_now()
 
-        # Build updated body
-        new_body = (
-            request.body.strip()
-            if request.body and request.body.strip()
-            else item.memory
-        )
+            # Delete old, re-add with new content and metadata
+            memory.delete(request.memory_id)
+            result = memory.add(
+                new_body, agent_id=request.project_id, metadata=existing_md, infer=False
+            )
+            from helpers import results_from_payload  # type: ignore  # noqa: PLC0415
 
-        # Build patched metadata (merge over existing)
-        existing_md = item.metadata.as_dict()
-        if request.repo is not None:
-            existing_md["repo"] = request.repo
-        if request.source_path is not None:
-            existing_md["source_path"] = request.source_path
-        if request.source_kind is not None:
-            existing_md["source_kind"] = request.source_kind
-        if request.category is not None:
-            existing_md["category"] = request.category
-        if request.module is not None:
-            existing_md["module"] = request.module
-        if request.tags is not None:
-            existing_md["tags"] = request.tags
-        if request.priority is not None:
-            existing_md["priority"] = request.priority
-        existing_md["updated_at"] = utc_now()
-
-        # Delete old, re-add with new content and metadata
-        memory.delete(request.memory_id)
-        result = memory.add(
-            new_body, agent_id=request.project_id, metadata=existing_md, infer=False
-        )
-        from helpers import results_from_payload  # type: ignore  # noqa: PLC0415
-
-        stored = results_from_payload(result)
-        new_ids = [i.id for i in stored if isinstance(i.id, str)]
-        return (
-            True,
-            f"Updated memory project={request.project_id} new_id={','.join(new_ids) if new_ids else 'n/a'}",
-        )
+            stored = results_from_payload(result)
+            new_ids = [i.id for i in stored if isinstance(i.id, str)]
+            return (
+                True,
+                f"Updated memory project={request.project_id} new_id={','.join(new_ids) if new_ids else 'n/a'}",
+            )
 
     def get_stats(
         self,
@@ -392,6 +450,7 @@ class MemoryManager:
         """Store multiple memories in one call. Returns per-item results."""
         from memory_types import StoreMemoryRequest, VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
 
+        METRICS.increment("bulk_store.calls")
         items = (
             pre_fetched_items
             if pre_fetched_items is not None
@@ -433,55 +492,102 @@ class MemoryManager:
                 )
             except Exception as exc:
                 results.append({"ok": False, "error": str(exc), "ids": []})
+        METRICS.increment("bulk_store.memories_processed", len(memories))
         return results
+
+    async def bulk_store_async(
+        self,
+        memories: list[dict[str, Any]],
+        *,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
+        """Async bulk store with concurrency-limited parallelism.
+
+        Useful for large ingestion jobs where sequential store_memory
+        calls are too slow but unlimited parallelism would overwhelm Chroma.
+        """
+        from memory_types import StoreMemoryRequest, VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
+
+        METRICS.increment("bulk_store_async.calls")
+        pre_fetched = await asyncio.to_thread(self.get_all_items, project_id)
+
+        async def _store_one(mem: dict[str, Any]) -> dict[str, Any]:
+            async with self._bulk_semaphore:
+                try:
+                    source_kind = str(mem.get("source_kind") or "summary")
+                    category = str(mem.get("category") or source_kind)
+                    raw_priority = mem.get("priority")
+                    priority = (
+                        raw_priority
+                        if isinstance(raw_priority, str)
+                        and raw_priority in VALID_PRIORITIES
+                        else "normal"
+                    )
+                    request = StoreMemoryRequest(
+                        project_id=project_id,
+                        content=str(mem.get("content") or mem.get("body") or "").strip(),
+                        repo=mem.get("repo") or None,
+                        source_path=mem.get("source_path") or None,
+                        source_kind=source_kind,
+                        category=category,
+                        module=mem.get("module") or None,
+                        tags=[t for t in (mem.get("tags") or []) if isinstance(t, str)],
+                        upsert_key=mem.get("upsert_key") or None,
+                        fingerprint=mem.get("fingerprint") or None,
+                        priority=priority,
+                    )
+                    if not request.content:
+                        return {"ok": False, "error": "empty content", "ids": []}
+                    deleted_count, new_ids = await asyncio.to_thread(
+                        self.store_memory, request, pre_fetched_items=pre_fetched
+                    )
+                    return {"ok": True, "deleted_existing": deleted_count, "ids": new_ids}
+                except Exception as exc:
+                    return {"ok": False, "error": str(exc), "ids": []}
+
+        tasks = [_store_one(mem) for mem in memories]
+        results = await asyncio.gather(*tasks)
+        METRICS.increment("bulk_store_async.memories_processed", len(memories))
+        return list(results)
 
     def delete_memory(
         self,
         request: DeleteMemoryRequest,
     ) -> tuple[str, int]:
         """Delete by ID or upsert_key. Returns (description, deleted_count)."""
-        memory = self.get_memory(request.project_id)
+        with OperationTimer("delete_duration_ms"):
+            METRICS.increment("delete.calls")
+            memory = self.get_memory(request.project_id)
 
-        if request.memory_id:
-            memory.delete(request.memory_id)
-            return (
-                f"Deleted memory_id={request.memory_id} from project={request.project_id}.",
-                1,
-            )
+            if request.memory_id:
+                memory.delete(request.memory_id)
+                return (
+                    f"Deleted memory_id={request.memory_id} from project={request.project_id}.",
+                    1,
+                )
 
-        if request.upsert_key:
-            all_memories = get_all_items(
-                memory, request.project_id, limit=self._get_all_limit
-            )
-            ids = _find_ids(all_memories, upsert_key=request.upsert_key)
-            for item_id in ids:
-                memory.delete(item_id)
-            return (
-                f"Deleted {len(ids)} memories with upsert_key={request.upsert_key} from project={request.project_id}.",
-                len(ids),
-            )
+            if request.upsert_key:
+                all_memories = get_all_items(
+                    memory, request.project_id, limit=self._get_all_limit
+                )
+                ids = _find_ids(all_memories, upsert_key=request.upsert_key)
+                for item_id in ids:
+                    memory.delete(item_id)
+                return (
+                    f"Deleted {len(ids)} memories with upsert_key={request.upsert_key} from project={request.project_id}.",
+                    len(ids),
+                )
 
-        return "Provide memory_id or upsert_key.", 0
+            return "Provide memory_id or upsert_key.", 0
 
     # -- Search cache -------------------------------------------------------
 
     def search_cache_get(self, cache_key: str) -> str | None:
-        cached = self._search_cache.get(cache_key)
-        if cached is None:
-            return None
-        expires_at, payload = cached
-        if time.time() >= expires_at:
-            self._search_cache.pop(cache_key, None)
-            return None
-        self._search_cache.move_to_end(cache_key)
-        return payload
+        return self._cache.get(cache_key)
 
     def search_cache_set(self, cache_key: str, payload: str) -> None:
-        expires_at = time.time() + self._config.cache_ttl_seconds
-        self._search_cache[cache_key] = (expires_at, payload)
-        self._search_cache.move_to_end(cache_key)
-        while len(self._search_cache) > self._config.cache_max_entries:
-            self._search_cache.popitem(last=False)
+        ttl = self._config.cache_ttl_seconds if self._config else 60.0
+        self._cache.set(cache_key, payload, ttl)
 
     # -- Search pipeline ----------------------------------------------------
 
@@ -552,73 +658,102 @@ class MemoryManager:
             raise RuntimeError(
                 "search() requires scoring_engine and config. Pass them to MemoryManager.__init__."
             )
-        tags = request.tags or []
-        categories = request.categories or []
-        ranking_mode = request.ranking_mode or self._config.default_ranking_mode
-        rerank_top_n = request.rerank_top_n or self._config.default_rerank_top_n
-        token_budget = request.token_budget or self._config.default_token_budget
-        candidate_pool = request.candidate_pool or self._config.max_candidate_pool
 
-        self._warm_memory_handles(request.project_ids)
-        project_results = await self._collect_project_searches(
-            request.project_ids, request.query, candidate_pool
-        )
-        # Parse date range filters once
-        after_date = parse_datetime(getattr(request, "after_date", None))
-        before_date = parse_datetime(getattr(request, "before_date", None))
+        with OperationTimer("search_duration_ms"):
+            METRICS.increment("search.calls")
+            tags = request.tags or []
+            categories = request.categories or []
+            ranking_mode = request.ranking_mode or self._config.default_ranking_mode
+            rerank_top_n = request.rerank_top_n or self._config.default_rerank_top_n
+            token_budget = request.token_budget or self._config.default_token_budget
+            candidate_pool = request.candidate_pool or self._config.max_candidate_pool
 
-        merged_candidates: list[dict[str, Any]] = []
-        for search_project_id in request.project_ids:
-            for raw_item in project_results.get(search_project_id, []):
-                item = _coerce_memory_item(raw_item)
-                if not _matches_filters(
-                    item,
-                    repo=request.repo,
-                    path_prefix=request.path_prefix,
-                    tags=tags,
-                    categories=categories,
-                ):
-                    continue
-                # Date range filtering
-                if after_date or before_date:
-                    updated = parse_datetime(item.metadata.updated_at)
-                    if after_date and (updated is None or updated < after_date):
-                        continue
-                    if before_date and (updated is None or updated > before_date):
-                        continue
-                merged_item = item.as_dict()
-                metadata = item.metadata.as_dict()
-                if not item.metadata.project_id:
-                    metadata["project_id"] = search_project_id
-                merged_item["metadata"] = metadata
-                merged_item["_project_id"] = search_project_id
-                merged_candidates.append(merged_item)
-
-        deduped_candidates = self._scoring_engine.dedupe_candidates(merged_candidates)
-        if not deduped_candidates:
-            return [], False
-
-        scored_candidates = self._scoring_engine.score_candidates(
-            request.query,
-            deduped_candidates,
-            repo=request.repo,
-            path_prefix=request.path_prefix,
-            tags=request.tags,
-            categories=request.categories,
-            ranking_mode=ranking_mode,
-            rerank_top_n=rerank_top_n,
-        )
-
-        rerank_used = False
-        if ranking_mode == "hybrid_weighted_rerank":
-            rerank_used = await asyncio.to_thread(
-                self._scoring_engine.reranker.apply,
-                request.query,
-                scored_candidates,
-                rerank_top_n,
+            self._warm_memory_handles(request.project_ids)
+            project_results = await self._collect_project_searches(
+                request.project_ids, request.query, candidate_pool
             )
-        finalized = self._scoring_engine.finalize_scores(scored_candidates)
-        packed = self._scoring_engine.pack_candidates(
-            finalized, limit=request.limit, token_budget=token_budget
-        )
-        return packed, rerank_used
+            # Parse date range filters once
+            after_date = parse_datetime(getattr(request, "after_date", None))
+            before_date = parse_datetime(getattr(request, "before_date", None))
+
+            merged_candidates: list[dict[str, Any]] = []
+            for search_project_id in request.project_ids:
+                for raw_item in project_results.get(search_project_id, []):
+                    item = _coerce_memory_item(raw_item)
+                    if not _matches_filters(
+                        item,
+                        repo=request.repo,
+                        path_prefix=request.path_prefix,
+                        tags=tags,
+                        categories=categories,
+                    ):
+                        continue
+                    # Date range filtering
+                    if after_date or before_date:
+                        updated = parse_datetime(item.metadata.updated_at)
+                        if after_date and (updated is None or updated < after_date):
+                            continue
+                        if before_date and (updated is None or updated > before_date):
+                            continue
+                    merged_item = item.as_dict()
+                    metadata = item.metadata.as_dict()
+                    if not item.metadata.project_id:
+                        metadata["project_id"] = search_project_id
+                    merged_item["metadata"] = metadata
+                    merged_item["_project_id"] = search_project_id
+                    merged_candidates.append(merged_item)
+
+            deduped_candidates = self._scoring_engine.dedupe_candidates(merged_candidates)
+            if not deduped_candidates:
+                METRICS.increment("search.empty_results")
+                return [], False
+
+            scored_candidates = self._scoring_engine.score_candidates(
+                request.query,
+                deduped_candidates,
+                repo=request.repo,
+                path_prefix=request.path_prefix,
+                tags=request.tags,
+                categories=request.categories,
+                ranking_mode=ranking_mode,
+                rerank_top_n=rerank_top_n,
+            )
+
+            rerank_used = False
+            if ranking_mode == "hybrid_weighted_rerank":
+                rerank_used = await asyncio.to_thread(
+                    self._scoring_engine.reranker.apply,
+                    request.query,
+                    scored_candidates,
+                    rerank_top_n,
+                )
+            finalized = self._scoring_engine.finalize_scores(scored_candidates)
+            packed = self._scoring_engine.pack_candidates(
+                finalized, limit=request.limit, token_budget=token_budget
+            )
+            METRICS.increment("search.results_returned", len(packed))
+            return packed, rerank_used
+
+    # -- Enterprise observability -------------------------------------------
+
+    def pool_stats(self) -> dict[str, Any]:
+        """Return connection pool statistics."""
+        stats = self._pool.stats
+        return {
+            "hits": stats.hits,
+            "misses": stats.misses,
+            "evictions": stats.evictions,
+            "expirations": stats.expirations,
+            "current_size": stats.current_size,
+        }
+
+    def cache_stats(self) -> dict[str, Any]:
+        """Return search cache statistics."""
+        s = self._cache.stats()
+        return {
+            "hits": s.hits,
+            "misses": s.misses,
+            "sets": s.sets,
+            "evictions": s.evictions,
+            "errors": s.errors,
+        }

@@ -234,7 +234,46 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def build_mem0_config(project_id: str) -> dict[str, Any]:
+def build_mem0_config(
+    project_id: str,
+    *,
+    chroma_mode: str = "local",
+    chroma_host: str = "localhost",
+    chroma_port: int = 8000,
+    chroma_auth_token: str = "",
+) -> dict[str, Any]:
+    """Build mem0 configuration, supporting both local and remote Chroma.
+
+    When ``chroma_mode`` is ``"remote"`` or ``"client"``, the vector store
+    connects to a Chroma server over HTTP instead of using a local
+    persistent directory.  This enables horizontal scaling with multiple
+    MCP server replicas pointing at the same Chroma cluster.
+    """
+    vector_store_config: dict[str, Any]
+
+    if chroma_mode in ("remote", "client"):
+        vector_store_config = {
+            "provider": "chroma",
+            "config": {
+                "collection_name": f"project-memory-{project_id}",
+                "host": chroma_host,
+                "port": chroma_port,
+            },
+        }
+        if chroma_auth_token:
+            vector_store_config["config"]["chroma_client_auth_provider"] = (
+                "chromadb.auth.token_authn.TokenAuthClientProvider"
+            )
+            vector_store_config["config"]["chroma_client_auth_credentials"] = chroma_auth_token
+    else:
+        vector_store_config = {
+            "provider": "chroma",
+            "config": {
+                "collection_name": f"project-memory-{project_id}",
+                "path": os.path.join(MEMORY_ROOT, project_id, "chroma"),
+            },
+        }
+
     return {
         "llm": {
             "provider": "ollama",
@@ -247,13 +286,7 @@ def build_mem0_config(project_id: str) -> dict[str, Any]:
             "provider": "huggingface",
             "config": {"model": "multi-qa-MiniLM-L6-cos-v1"},
         },
-        "vector_store": {
-            "provider": "chroma",
-            "config": {
-                "collection_name": f"project-memory-{project_id}",
-                "path": os.path.join(MEMORY_ROOT, project_id, "chroma"),
-            },
-        },
+        "vector_store": vector_store_config,
     }
 
 

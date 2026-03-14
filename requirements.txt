@@ -7,11 +7,11 @@ pytest-cov
 mcp
 mem0ai
 pyyaml
-pypdf
 chromadb
 ollama
-sentence-transformers 
 transformers
-rank_bm25
 watchdog
 debugpy
+
+# Enterprise scaling (optional)
+redis              # Required only if CACHE_BACKEND=redis
