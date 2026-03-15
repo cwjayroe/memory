@@ -1,8 +1,70 @@
 # Project Memory
 
-This repo provides a local scoped memory and context system for agent workflows in tools such as Codex, Cursor, and Claude. It combines an MCP server for retrieval and CRUD operations with a small ingestion CLI for repo maintenance and manifest management.
+A local scoped memory and context system for agent workflows (Codex, Cursor, Claude). Combines an MCP server for retrieval and CRUD with a CLI for repo ingestion and manifest management. Uses a hybrid vector + SQLite backend for semantic search, structured metadata, entity graphs, and audit logging.
 
-The implementation currently uses `project_id` as the storage and retrieval namespace key. In practice, a `project_id` can represent a project, domain, workstream, standards pack, migration, incident, customer issue, or any other durable context scope.
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [What it supports](#what-it-supports)
+- [Example scope shapes](#example-scope-shapes)
+- [Documentation](#documentation)
+- [Repo layout](#repo-layout)
+- [Install](#install)
+- [Run tests](#run-tests)
+- [Manifest model](#manifest-model)
+- [MCP server](#mcp-server)
+- [Runtime configuration](#runtime-configuration)
+- [CLI workflows](#cli-workflows)
+- [PDF ingestion](#pdf-ingestion)
+- [Retention policy](#retention-policy)
+- [Codex skill](#codex-skill)
+- [Debugging](#debugging)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick Start
+
+```bash
+# 1. Clone and install dependencies
+git clone <repo-url>
+cd memory
+python -m pip install -r requirements.txt
+
+# 2. Start Ollama (required for embeddings and LLM operations)
+ollama serve
+ollama pull llama3.2
+
+# 3. Set your primary scope
+export PROJECT_ID=my-project
+
+# 4. (Optional) Set storage root — defaults to ~/.project-memory
+export PROJECT_MEMORY_ROOT=~/.project-memory
+
+# 5. Start the MCP server
+python mcp_server.py
+
+# 6. Verify everything is working
+python examples.py
+```
+
+To ingest your first repo, edit `projects.yaml` to add your project and repo, then:
+
+```bash
+python ingest.py project-init \
+  --project my-project \
+  --repos my-repo \
+  --description "My project context"
+
+python ingest.py repo \
+  --project my-project \
+  --repo my-repo \
+  --mode mixed
+```
+
+See [docs/ingestion-guide.md](docs/ingestion-guide.md) for full ingestion documentation.
+
+---
 
 ## What it supports
 - scoped memories keyed by `project_id`
@@ -15,6 +77,21 @@ The implementation currently uses `project_id` as the storage and retrieval name
 - `billing-domain`: cross-repo context for a subsystem or business area
 - `migration-2026`: initiative or workstream context spanning many repos
 - `customer-escalation-acme`: incident or customer-specific context bundle
+
+## Documentation
+
+Detailed documentation lives in the `docs/` directory:
+
+| Document | Contents |
+|----------|----------|
+| [docs/architecture.md](docs/architecture.md) | System architecture, component map, data flow diagrams, design decisions |
+| [docs/mcp-tools-reference.md](docs/mcp-tools-reference.md) | Full parameter reference for all 30 MCP tools with examples |
+| [docs/configuration.md](docs/configuration.md) | All environment variables, manifest schema reference, scope resolution walkthrough |
+| [docs/scoring-and-ranking.md](docs/scoring-and-ranking.md) | Hybrid scoring formula, ranking modes, candidate packing, tuning guide |
+| [docs/ingestion-guide.md](docs/ingestion-guide.md) | Chunking modes, all CLI subcommands, deduplication, watch mode, retention policy tiers |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common errors, health check guide, debugging techniques |
+
+---
 
 ## Repo layout
 - `mcp_server.py`: MCP server exposing retrieval, CRUD, and maintenance tools
@@ -122,6 +199,21 @@ python mcp_server.py
 - `copy_scope`: copy all memories from one scope to another. Required: `from_project_id`, `to_project_id`. Optional: `dry_run` (preview without writing).
 - `export_scope`: export all memories for a scope as a JSON array or newline-delimited JSON (backup or cross-machine migration). Optional: `project_id`, `format` (`json` or `ndjson`).
 - `summarize_scope`: generate a prose summary of scope contents (grouped by category) using the configured LLM. Optional: `project_id`, `repo`, `category`, `max_tokens`.
+
+### Graph and entity tools
+These tools require `PROJECT_MEMORY_SQLITE_ENABLED=true` (default). They operate on the knowledge graph stored in SQLite.
+
+- `link_memories`: create a typed relation between two memories. Required: `source_id`, `target_id`. Optional: `relation` (`supersedes`, `implements`, `depends_on`, `related_to`, `contradicts`, `refines`; default `related_to`), `project_id`, `confidence` (0.0–1.0).
+- `get_related`: traverse memory relations by hop count. Required: `memory_id`. Optional: `project_id`, `max_hops` (1–3), `relation_types`, `response_format`.
+- `list_entities`: enumerate extracted entities for a scope. Optional: `project_id`, `kind` (`service`, `api`, `module`, `pattern`, `concept`, `tool`, `file`), `limit`, `response_format`.
+- `search_by_entity`: retrieve all memories linked to a named entity. Required: `entity_name`. Optional: `entity_kind`, `project_id`, `response_format`.
+- `get_memory_history`: view version history for a memory. Required: `memory_id`. Optional: `project_id`, `response_format`.
+- `extract_entities`: run entity extraction over a scope or a single memory; builds and updates the knowledge graph. Optional: `project_id`, `memory_id` (omit to process all memories in scope).
+- `migrate_to_sqlite`: backfill SQLite metadata from the ChromaDB vector store. Run once when enabling SQLite on an existing deployment. Optional: `project_id`.
+- `consolidate_memories`: cluster and propose merges for related memories sharing entities. Optional: `project_id`, `category`, `entity`, `dry_run` (default `true`).
+- `detect_duplicates`: find near-duplicate memory groups using text similarity. Optional: `project_id`, `threshold` (default 0.92), `category`, `response_format`.
+
+For full parameter tables and usage examples for all 30 tools, see [docs/mcp-tools-reference.md](docs/mcp-tools-reference.md).
 
 ### Project stats (`get_stats`)
 Use the `get_stats` MCP tool to inspect a scope without running search or embeddings. Arguments: `project_id` (optional; defaults to configured scope), `repo` (optional filter). The response is JSON with: `total_memories`, `estimated_tokens`, `oldest_updated_at`, `newest_updated_at`, `duplicate_fingerprints`, and breakdowns `by_category`, `by_repo`, `by_source_kind`, `by_priority`. Useful for audits and capacity checks.
@@ -422,3 +514,5 @@ If you want to script MCP calls against the local server, point your client at r
 - If you need the exact stored body for one result, call `get_memory` with the returned `memory_id`.
 - If a PDF-derived result looks too broad or too old, re-ingest the source PDF so the current chunker replaces older stored chunks.
 - If reranking is unavailable, inspect the configured reranker dependencies and `PROJECT_MEMORY_RERANKER_MODEL`.
+
+For a full diagnostics guide including health-check commands, common error messages, Ollama/ChromaDB/SQLite failure modes, and debugging flows, see [docs/troubleshooting.md](docs/troubleshooting.md).
