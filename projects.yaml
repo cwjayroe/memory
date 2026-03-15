@@ -44,6 +44,14 @@ projects:
     - plans
     repos:
     - customcheckout
+  qa-test-kaizen:
+    description: QA retest scope for validating bug fixes
+    tags:
+    - qa
+    - test
+    - retest
+    repos:
+    - kaizen
 repos:
   customcheckout:
     root: /Users/willjayroe/Desktop/repos/customcheckout
@@ -94,6 +102,23 @@ repos:
     default_tags:
     - product-docs
     - prd
+  kaizen:
+    root: .
+    include:
+    - '**/*.py'
+    - '**/*.md'
+    - '**/*.rst'
+    - '**/*.txt'
+    exclude:
+    - '**/.git/**'
+    - '**/.venv/**'
+    - '**/__pycache__/**'
+    - '**/.pytest_cache/**'
+    - '**/node_modules/**'
+    - '**/migrations/**'
+    default_tags:
+    - kaizen
+    default_active_project: null
 context_packs:
   default_3_layer:
     layer_1:

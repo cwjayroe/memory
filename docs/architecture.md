@@ -10,62 +10,48 @@ A key concept is the **scope** (`project_id`), which namespaces all stored memor
 
 ## Component Map
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Consumers                            │
-│  ┌──────────────┐   ┌──────────────┐   ┌────────────────┐  │
-│  │  MCP Client  │   │  Codex Skill │   │  CLI (ingest)  │  │
-│  │ (Claude/IDE) │   │  SKILL.md    │   │  ingest.py     │  │
-│  └──────┬───────┘   └──────┬───────┘   └───────┬────────┘  │
-└─────────┼─────────────────┼───────────────────┼────────────┘
-          │                 │                   │
-          ▼                 ▼                   │
-┌─────────────────────────────────┐             │
-│          MCP Server             │             │
-│         mcp_server.py           │             │
-│  30 registered tools            │             │
-│  - scope resolution             │             │
-│  - request parsing              │             │
-│  - result caching (60s TTL)     │             │
-└──────────────┬──────────────────┘             │
-               │                                │
-               ▼                                ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Memory Manager                          │
-│                    memory_manager.py                        │
-│  - per-scope mem0.Memory instance cache                     │
-│  - CRUD: store, update, delete, get, list                   │
-│  - fingerprint-based deduplication                          │
-│  - search orchestration (async, timeout)                    │
-│  - access logging                                           │
-└────────────┬────────────────────────┬───────────────────────┘
-             │                        │
-             ▼                        ▼
-┌─────────────────────┐   ┌───────────────────────────────────┐
-│   mem0 + ChromaDB   │   │       SQLite Metadata Store       │
-│  (vector store)     │   │         sqlite_store.py           │
-│  - embeddings       │   │  - memories (fingerprint, tags)   │
-│  - similarity search│   │  - memory_tags                    │
-│  - per-scope        │   │  - access_log                     │
-│    collections      │   │  - memory_versions (audit trail)  │
-│                     │   │  - entities + memory_entities     │
-│  model:             │   │  - relations (knowledge graph)    │
-│  multi-qa-MiniLM    │   │                                   │
-└─────────────────────┘   └───────────────────────────────────┘
-             │
-             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Scoring Engine                          │
-│                       scoring.py                            │
-│  hybrid: vector + BM25 + metadata + reranker + graph        │
-└─────────────────────────────────────────────────────────────┘
-             │
-             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Manifest System                         │
-│                      manifest.py                            │
-│  projects.yaml → project/repo/context-pack resolution       │
-└─────────────────────────────────────────────────────────────┘
+Source: [docs/diagrams/project-memory.mmd](diagrams/project-memory.mmd)
+
+```mermaid
+flowchart TB
+  subgraph consumers[Consumers]
+    mcp_client[MCP Client\nClaude/IDE]
+    codex_skill[Codex Skill\nSKILL.md]
+    cli[CLI ingest\ningest.py]
+  end
+
+  subgraph mcp[MCP Server]
+    mcp_server[mcp_server.py\n30 tools, scope resolution\nrequest parsing, cache 60s TTL]
+  end
+
+  subgraph manager[Memory Manager]
+    mem_mgr[memory_manager.py\nmem0 per-scope cache\nCRUD, dedup, search\naccess logging]
+  end
+
+  subgraph storage[Storage]
+    chroma[mem0 + ChromaDB\nembeddings, similarity\nper-scope collections]
+    sqlite[SQLite\nsqlite_store.py\nmemories, tags, access_log\nversions, entities, relations]
+  end
+
+  subgraph scoring_block[Scoring Engine]
+    scoring_eng[scoring.py\nhybrid: vector + BM25\n+ metadata + reranker + graph]
+  end
+
+  subgraph manifest_block[Manifest System]
+    manifest_sys[manifest.py\nprojects.yaml\nscope / repo resolution]
+  end
+
+  mcp_client --> mcp_server
+  codex_skill --> mcp_server
+  mcp_server --> mem_mgr
+  cli --> mem_mgr
+  cli --> manifest_sys
+  mcp_server --> manifest_sys
+  mem_mgr --> chroma
+  mem_mgr --> sqlite
+  mem_mgr --> scoring_eng
+  chroma --> scoring_eng
+  scoring_eng --> mem_mgr
 ```
 
 ---

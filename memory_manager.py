@@ -400,6 +400,19 @@ class MemoryManager:
                     store.upsert_memory(nid, new_body, existing_md)
                 except Exception:
                     self._logger.debug("SQLite upsert for update %s failed", nid, exc_info=True)
+            for nid in new_ids:
+                try:
+                    store.save_version(
+                        nid,
+                        new_body,
+                        json.dumps(existing_md),
+                        change_source="update",
+                        predecessor_id=request.memory_id,
+                    )
+                except Exception:
+                    self._logger.debug(
+                        "SQLite save_version for new id %s failed", nid, exc_info=True
+                    )
 
         return (
             True,
@@ -491,7 +504,7 @@ class MemoryManager:
                 project_id=request.project_id, memory_id=request.memory_id
             )
             if item is None:
-                return []
+                return [{"error": f"Memory not found: {request.memory_id}"}]
             query_text = item.memory
         elif request.text:
             query_text = request.text
@@ -511,6 +524,8 @@ class MemoryManager:
             if request.memory_id and item.id == request.memory_id:
                 continue
             score = item.extra.get("score", 0.0) if hasattr(item, "extra") else 0.0
+            if score < request.threshold:
+                continue
             results.append(
                 {
                     "id": item.id,

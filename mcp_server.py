@@ -92,6 +92,13 @@ async def _handle_search_context(arguments: dict[str, Any]) -> list[TextContent]
         except Exception:
             _all_projects = []
         if not _all_projects:
+            try:
+                _store = mem_manager._get_metadata_store(DEFAULT_PROJECT_ID)
+                if _store is not None:
+                    _all_projects = _store.list_project_ids()
+            except Exception:
+                pass
+        if not _all_projects:
             _all_projects = [DEFAULT_PROJECT_ID]
         max_scopes = config.max_projects_per_query * 3
         project_ids = _all_projects[:max_scopes]
@@ -616,6 +623,8 @@ async def _handle_find_similar(arguments: dict[str, Any]) -> list[TextContent]:
         return [TextContent(type="text", text="Provide memory_id or text.")]
 
     results = mem_manager.find_similar(request=request)
+    if results and isinstance(results[0], dict) and "error" in results[0]:
+        return [TextContent(type="text", text=results[0]["error"])]
     if not results:
         return [TextContent(type="text", text="No similar memories found.")]
 
@@ -772,7 +781,12 @@ async def _handle_link_memories(arguments: dict[str, Any]) -> list[TextContent]:
     store = mem_manager._get_metadata_store(req.project_id)
     if store is None:
         return [TextContent(type="text", text="SQLite store not available. Enable PROJECT_MEMORY_SQLITE_ENABLED=true.")]
-    store.add_relation(req.source_id, req.target_id, req.relation, req.confidence, created_by="user")
+    try:
+        store.add_relation(req.source_id, req.target_id, req.relation, req.confidence, created_by="user")
+    except Exception as exc:
+        if "FOREIGN KEY" in str(exc):
+            return [TextContent(type="text", text=f"Link failed: one or both memory IDs not found (source={req.source_id}, target={req.target_id})")]
+        raise
     return [TextContent(type="text", text=f"Linked {req.source_id} --[{req.relation}]--> {req.target_id} (confidence={req.confidence})")]
 
 

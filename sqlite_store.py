@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS memory_versions (
     metadata    TEXT NOT NULL,
     version     INTEGER NOT NULL,
     changed_at  TEXT NOT NULL,
-    change_source TEXT
+    change_source TEXT,
+    predecessor_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_versions_memory ON memory_versions(memory_id);
@@ -156,6 +157,10 @@ class MetadataStore:
     def _init_schema(self) -> None:
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
+        try:
+            conn.execute("ALTER TABLE memory_versions ADD COLUMN predecessor_id TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
     def close(self) -> None:
@@ -419,6 +424,7 @@ class MetadataStore:
         body: str,
         metadata_json: str,
         change_source: str = "update",
+        predecessor_id: str | None = None,
     ) -> None:
         now = _utc_now()
         conn = self._get_conn()
@@ -429,35 +435,56 @@ class MetadataStore:
         version = cur.fetchone()[0] + 1
         conn.execute(
             """
-            INSERT INTO memory_versions (memory_id, body, metadata, version, changed_at, change_source)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO memory_versions (memory_id, body, metadata, version, changed_at, change_source, predecessor_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (memory_id, body, metadata_json, version, now, change_source),
+            (memory_id, body, metadata_json, version, now, change_source, predecessor_id),
         )
         conn.commit()
 
+    def list_project_ids(self) -> list[str]:
+        conn = self._get_conn()
+        cur = conn.execute("SELECT DISTINCT project_id FROM memories ORDER BY project_id")
+        return [row[0] for row in cur.fetchall() if row[0]]
+
     def get_versions(self, memory_id: str) -> list[dict[str, Any]]:
         conn = self._get_conn()
-        cur = conn.execute(
-            """
-            SELECT id, memory_id, body, metadata, version, changed_at, change_source
-            FROM memory_versions WHERE memory_id = ?
-            ORDER BY version DESC
-            """,
-            (memory_id,),
-        )
-        return [
-            {
-                "id": r[0],
-                "memory_id": r[1],
-                "body": r[2],
-                "metadata": r[3],
-                "version": r[4],
-                "changed_at": r[5],
-                "change_source": r[6],
-            }
-            for r in cur.fetchall()
-        ]
+        all_versions: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        current_id = memory_id
+
+        for _ in range(10):
+            if current_id in seen:
+                break
+            seen.add(current_id)
+
+            cur = conn.execute(
+                """
+                SELECT id, memory_id, body, metadata, version, changed_at, change_source, predecessor_id
+                FROM memory_versions WHERE memory_id = ? ORDER BY version DESC
+                """,
+                (current_id,),
+            )
+            rows = cur.fetchall()
+            predecessor = None
+            for row in rows:
+                all_versions.append({
+                    "id": row[0],
+                    "memory_id": row[1],
+                    "body": row[2],
+                    "metadata": row[3],
+                    "version": row[4],
+                    "changed_at": row[5],
+                    "change_source": row[6],
+                })
+                if row[7]:
+                    predecessor = row[7]
+
+            if not predecessor:
+                break
+            current_id = predecessor
+
+        return sorted(all_versions, key=lambda v: v["changed_at"], reverse=True)
 
     def upsert_entity(self, name: str, kind: str, project_id: str) -> int:
         conn = self._get_conn()

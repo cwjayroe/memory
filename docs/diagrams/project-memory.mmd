@@ -1,0 +1,45 @@
+%% title: Project Memory – component map
+%% owner: (codeowners / team if known)
+%% last_updated: 2026-03-15
+%% scope: High-level components: consumers, MCP server, memory manager, dual-layer storage, scoring, manifest. Excludes data-flow detail (see architecture.md).
+%% entrypoints: MCP tools (Claude/IDE, Codex skill), CLI ingest (ingest.py)
+%% notes: CLI ingest bypasses MCP server and calls memory manager (and manifest) directly.
+flowchart TB
+  subgraph consumers[Consumers]
+    mcp_client[MCP Client\nClaude/IDE]
+    codex_skill[Codex Skill\nSKILL.md]
+    cli[CLI ingest\ningest.py]
+  end
+
+  subgraph mcp[MCP Server]
+    mcp_server[mcp_server.py\n30 tools, scope resolution\nrequest parsing, cache 60s TTL]
+  end
+
+  subgraph manager[Memory Manager]
+    mem_mgr[memory_manager.py\nmem0 per-scope cache\nCRUD, dedup, search\naccess logging]
+  end
+
+  subgraph storage[Storage]
+    chroma[mem0 + ChromaDB\nembeddings, similarity\nper-scope collections]
+    sqlite[SQLite\nsqlite_store.py\nmemories, tags, access_log\nversions, entities, relations]
+  end
+
+  subgraph scoring_block[Scoring Engine]
+    scoring_eng[scoring.py\nhybrid: vector + BM25\n+ metadata + reranker + graph]
+  end
+
+  subgraph manifest_block[Manifest System]
+    manifest_sys[manifest.py\nprojects.yaml\nscope / repo resolution]
+  end
+
+  mcp_client --> mcp_server
+  codex_skill --> mcp_server
+  mcp_server --> mem_mgr
+  cli --> mem_mgr
+  cli --> manifest_sys
+  mcp_server --> manifest_sys
+  mem_mgr --> chroma
+  mem_mgr --> sqlite
+  mem_mgr --> scoring_eng
+  chroma --> scoring_eng
+  scoring_eng --> mem_mgr

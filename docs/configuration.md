@@ -25,9 +25,9 @@ All configuration is read at startup via `server_config.py`. No restart is requi
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PROJECT_MEMORY_RANKING_MODE` | `hybrid_weighted_rerank` | Search ranking strategy. Options: `hybrid_weighted_rerank` (uses cross-encoder reranker), `hybrid_weighted` (no reranker, faster). |
-| `PROJECT_MEMORY_DEFAULT_TOKEN_BUDGET` | `1800` | Default token budget for packed search results. Larger budgets return more content. |
-| `PROJECT_MEMORY_MIN_TOKEN_BUDGET` | `600` | Minimum allowed token budget (requests below this are clamped up). |
-| `PROJECT_MEMORY_MAX_TOKEN_BUDGET` | `4000` | Maximum allowed token budget (requests above this are clamped down). |
+| `PROJECT_MEMORY_MIN_TOKEN_BUDGET` | `600` | Minimum allowed token budget for search results (default: 600). |
+| `PROJECT_MEMORY_MAX_TOKEN_BUDGET` | `4000` | Maximum allowed token budget for search results (default: 4000). |
+| `PROJECT_MEMORY_DEFAULT_TOKEN_BUDGET` | `1800` | Default token budget when not specified (default: 1800). |
 | `PROJECT_MEMORY_DEFAULT_RERANK_TOP_N` | `40` | Number of candidates passed to the cross-encoder reranker. Higher = better precision, slower. |
 | `PROJECT_MEMORY_MAX_CANDIDATE_POOL` | `200` | Maximum candidate pool size from vector search before scoring. |
 | `PROJECT_MEMORY_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | HuggingFace model ID for the cross-encoder reranker. Downloaded on first use. |

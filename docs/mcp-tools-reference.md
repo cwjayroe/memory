@@ -24,7 +24,7 @@ Search scoped memory for architectural context, decisions, and code-aware summar
 | `highlight` | No | boolean | false | Wrap matching query tokens in **bold** in excerpt text |
 | `search_all_scopes` | No | boolean | false | Search across all manifest scopes (ignores `project_id`/`project_ids`) |
 | `ranking_mode` | No | string | `hybrid_weighted_rerank` | `hybrid_weighted_rerank` or `hybrid_weighted` |
-| `token_budget` | No | integer | 1800 | Max token count for packed results |
+| `token_budget` | No | integer | 1800 | Max token count for packed results (minimum: 600, maximum: 4000, default: 1800) |
 | `candidate_pool` | No | integer | 200 | Vector search candidate pool size |
 | `rerank_top_n` | No | integer | 40 | Candidates passed to cross-encoder reranker |
 | `limit` | No | integer | 8 | Max results to return |
@@ -196,6 +196,8 @@ Atomically update an existing memory's body and/or metadata. Patch semantics: on
 | `module` | No | string | — | Update module |
 | `tags` | No | array/string | — | Replace tags |
 | `priority` | No | string | — | Update priority |
+
+> **Note:** `update_memory` deletes the old memory and creates a new one, producing a new `memory_id`. The old ID becomes invalid after the update. Use the `new_id` returned in the response for subsequent operations. Version history is preserved and accessible via `get_memory_history` on the new ID.
 
 **Example**:
 ```json
