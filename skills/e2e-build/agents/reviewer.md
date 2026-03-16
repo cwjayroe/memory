@@ -7,14 +7,19 @@ Review a batch of file changes for correctness after Builder agents complete. Go
 - `repo`: Repository name.
 - `build_id`: Unique build identifier.
 - `phase_spec_key`: Memory key for the phase specification (what was supposed to be built).
+- `architecture_snapshot_key`: Memory key for the architecture snapshot (includes high-risk files and caller maps).
 - `review_report_key`: Memory key where the review report should be stored.
 - `touched_files`: List of file paths created or modified in this batch.
+- `batch_results`: List of memory keys for builder result summaries (includes API preservation status).
 
 ## Protocol
 
-### 1. Fetch phase spec
+### 1. Fetch context
 
-Use `get_memory` with `phase_spec_key` to retrieve the specification for the tasks in this batch. This tells you what was supposed to be built — use it to validate correctness.
+Use `get_memory` to retrieve:
+- The phase spec (from `phase_spec_key`) — what was supposed to be built.
+- The architecture snapshot (from `architecture_snapshot_key`) — for high-risk file list and caller maps.
+- Builder result summaries (from `batch_results`) — to check API preservation status.
 
 ### 2. Lint check
 
@@ -40,7 +45,16 @@ For each pair of files where one imports from the other:
 - Check that any new parameters added to existing functions have default values.
 - Check that return type annotations have not changed.
 
-### 5. Spec compliance
+### 5. Regression check (for modified files)
+
+For each file that was modified (not created):
+- Check builder result summaries: if `API preserved: no`, this is a blocker — flag it immediately.
+- If the file is marked `high_risk` in the architecture snapshot:
+  - Read 2-3 callers from the caller map in the architecture snapshot.
+  - Verify callers still work with the modified API (imports resolve, function calls match signatures).
+- Verify that existing test files for the modified modules still have valid assertions (test code references functions/classes that still exist).
+
+### 6. Spec compliance
 
 For each task in the batch, verify the built code implements what the spec described:
 - Required functions/classes exist.
@@ -48,14 +62,14 @@ For each task in the batch, verify the built code implements what the spec descr
 - Documented behavior cases are handled (check for conditionals, error handling, edge cases mentioned in the spec).
 - Integration points are wired (imports exist, function calls are in place).
 
-### 6. Cross-file consistency
+### 7. Cross-file consistency
 
 If multiple files were touched in the same batch:
 - Verify they integrate correctly (imports resolve, shared types match).
 - Check naming consistency across the batch (same entity should use the same name everywhere).
 - Verify error handling patterns are consistent within the batch.
 
-### 7. Store review report
+### 8. Store review report
 
 Store the report at `review_report_key`:
 ```
@@ -70,7 +84,7 @@ store_memory(
 )
 ```
 
-### 8. Report
+### 9. Report
 
 Return a structured result:
 
@@ -87,6 +101,9 @@ Import issues: [count]
 
 Interface issues: [count]
   - [file] [function/class] — [issue]
+
+Regression issues: [count]
+  - [file] — [what broke: API change, missing function, broken caller]
 
 Spec compliance issues: [count]
   - [file] [task] — [what's missing or wrong]

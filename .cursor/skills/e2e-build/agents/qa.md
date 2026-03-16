@@ -8,6 +8,7 @@ Perform end-to-end quality assurance on a completed build. Tests the system as a
 - `build_id`: Unique build identifier.
 - `plan_key`: Memory key for the build plan (what was supposed to be built).
 - `progress_key`: Memory key for the progress tracker (files created/modified).
+- `baseline_key`: Memory key for the pre-build test baseline (test results before any changes).
 - `qa_report_key`: Memory key where the QA report should be stored.
 
 ## Protocol
@@ -17,6 +18,7 @@ Perform end-to-end quality assurance on a completed build. Tests the system as a
 Use `get_memory` to retrieve:
 - The plan (from `plan_key`) — to understand what was supposed to be built.
 - The progress summary (from `progress_key`) — to get the list of all created and modified files.
+- The pre-build test baseline (from `baseline_key`) — to distinguish new failures from pre-existing ones.
 
 ### 2. Test suite execution
 
@@ -29,6 +31,16 @@ Capture: total tests, passed, failed, errors, warnings.
 
 If tests fail, record each failure with: file path, test name, error message, and traceback summary.
 
+### 2b. Failure attribution
+
+Compare test results against the pre-build baseline:
+- **New failures**: tests that passed in the baseline but fail now → these are **regressions caused by the build** and are blockers.
+- **Pre-existing failures**: tests that also failed in the baseline → note them but do NOT flag as blockers.
+- **New tests failing**: tests in newly created test files that fail → these are blockers (the build introduced them).
+- **Fixed tests**: tests that failed in the baseline but pass now → note as a positive outcome.
+
+This distinction is critical for existing systems where some tests may already be failing.
+
 ### 3. Coverage check
 
 Run with coverage:
@@ -39,6 +51,8 @@ python -m pytest --cov --cov-report=term-missing -q
 Check that overall coverage meets the project minimum (look for a `.coveragerc` or `pyproject.toml` `[tool.coverage]` section for the threshold; default to 70% if not specified).
 
 Flag any new files (from the progress list) with 0% coverage.
+
+Compare against baseline coverage: if overall coverage dropped, flag as a warning.
 
 ### 4. Lint sweep
 
@@ -87,17 +101,26 @@ Report structure:
 QA REPORT: PASS | FAIL
 
 Test Results: X passed, Y failed, Z errors
-Coverage: X% (minimum: Y%)
+  Regressions (passed before, fail now): N
+  New test failures: N
+  Pre-existing failures (also failed before): N
+  Fixed (failed before, pass now): N
+Coverage: X% (minimum: Y%, baseline: Z%)
 Lint Errors: N total (M in new code, K pre-existing)
 Import Checks: X/Y passed
 Completeness: X/Y tasks verified
 
 Blockers (must fix before completion):
-- [file:line] description
-- [file:line] description
+- [REGRESSION] [test_file::test_name] description
+- [NEW FAILURE] [test_file::test_name] description
+- [file:line] lint/import description
 
 Warnings (should fix):
 - [file] description
+- Coverage dropped from X% to Y%
+
+Pre-existing (not caused by this build):
+- [test_file::test_name] was already failing
 
 Notes:
 - Any observations about test quality, architecture, patterns
@@ -110,14 +133,15 @@ Return to the coordinator (≤15 lines):
 QA RESULT: PASS | FAIL
 
 Tests: X passed, Y failed, Z errors
-Coverage: X% (min: Y%)
+  Regressions: N | New failures: N | Pre-existing: N
+Coverage: X% (min: Y%, baseline: Z%)
 Lint: N issues in new code
 Imports: X/Y passed
 Completeness: X/Y tasks
 
 Blockers: N
 Warnings: N
-Recommendation: {one-line if FAIL, e.g., "3 test failures in auth module, 1 missing export"}
+Recommendation: {one-line if FAIL, e.g., "2 regressions in auth module, 1 new test failure in webhook handler"}
 ```
 
 ## Constraints

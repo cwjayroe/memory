@@ -30,9 +30,23 @@ Check if the target file exists:
   - Logger pattern
   - Constants pattern
 - **If modifying an existing file**: read the full target file, plus:
-  - Files that import from the target (to understand the public interface)
+  - Files that import from the target (to understand the public interface that must not break)
   - Files that the target imports from (to understand available APIs)
   - Any new files being integrated (to understand their interface)
+  - **The existing test file** for this module (from `test_file` in the task spec, or search for `test_{module_name}.py`). Understand what's currently tested so you can preserve those behaviors.
+
+### 2b. Regression awareness (for modifications only)
+
+When modifying an existing file:
+- **Catalog the public API** before making changes: list all public functions, classes, and their signatures.
+- After making changes, verify you have NOT:
+  - Removed or renamed any existing public function/class.
+  - Changed the signature of an existing public function (added params without defaults, changed return type).
+  - Changed the behavior of existing code paths (only add new paths, don't alter existing ones unless the spec explicitly says to).
+- If the task spec includes `high_risk: true`, take extra care:
+  - Read at least 2-3 callers of the file to understand how it's used.
+  - Ensure all new parameters have sensible defaults.
+  - Log at debug level for new code paths so failures are visible but not disruptive.
 
 ### 3. Implement the task
 
@@ -82,7 +96,9 @@ Task: {description}
 Action: created | modified
 File: {file_path}
 Public API: {class/function names and signatures if new}
+API preserved: yes | no (for modifications — confirm existing public API unchanged)
 Decisions: {any choices made that weren't in the spec}
+Test file: {path to associated test file}
 Lint: clean | {count} issues remaining
 ```
 

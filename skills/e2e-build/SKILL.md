@@ -30,6 +30,7 @@ All inter-phase communication flows through memory MCP using deterministic upser
 | Build | `{repo}::e2e-build::{build_id}::progress` | architecture | summary | high |
 | Review | `{repo}::e2e-build::{build_id}::review-batch-{B}` | code | summary | normal |
 | QA | `{repo}::e2e-build::{build_id}::qa-report` | decision | summary | high |
+| Baseline | `{repo}::e2e-build::{build_id}::test-baseline` | code | summary | high |
 | Done | `{repo}::e2e-build::{build_id}::completion` | decision | summary | high |
 
 All writes use `upsert_key` for idempotency. All writes include `tags=["e2e-build", build_id]` and `repo="{repo}"`.
@@ -52,7 +53,22 @@ All writes use `upsert_key` for idempotency. All writes include `tags=["e2e-buil
      tags=["e2e-build", build_id]
    )
    ```
-4. Drop the document from coordinator context. Retain only `build_id` and `repo`.
+4. **Capture pre-build test baseline** (for existing systems):
+   - Run the project's test suite: `python -m pytest -q` and capture the output.
+   - Store the baseline in memory:
+     ```
+     store_memory(
+       content="Pre-build test baseline:\nTotal: X, Passed: Y, Failed: Z, Errors: W\nFailing tests: [list of test_file::test_name]\nCoverage: X%",
+       category="code",
+       source_kind="summary",
+       priority="high",
+       upsert_key="{repo}::e2e-build::{build_id}::test-baseline",
+       repo="{repo}",
+       tags=["e2e-build", build_id]
+     )
+     ```
+   - If no test suite exists (brand new project), store: "No pre-existing test suite."
+5. Drop the document from coordinator context. Retain only `build_id` and `repo`.
 
 ### Phase 1: Plan (Planner Agent)
 
@@ -97,7 +113,7 @@ For each task in the batch:
 **2d. Review each batch**
 After all builders in a batch complete:
 1. Read `agents/reviewer.md` from this skill folder.
-2. Launch a Reviewer task with: reviewer protocol + list of touched files + memory key for the phase spec.
+2. Launch a Reviewer task with: reviewer protocol + list of touched files + memory keys for: phase spec, architecture snapshot, and builder result summaries from this batch.
 3. Reviewer stores report at `{repo}::e2e-build::{build_id}::review-batch-{B}`.
 4. If FAIL: re-launch failing builder task with error context from the review report (max 3 retries per task).
 5. If PASS: mark todos `completed`, advance to next batch.
@@ -122,15 +138,16 @@ After all build phases complete:
 
 1. Read `agents/qa.md` from this skill folder.
 2. Launch a single `Task` with:
-   - QA protocol + memory keys for plan, progress, and all review reports.
+   - QA protocol + memory keys for plan, progress, test baseline, and all review reports.
 3. QA agent will:
-   a. Retrieve plan and progress from memory.
+   a. Retrieve plan, progress, and test baseline from memory.
    b. Run the test suite and coverage checks.
-   c. Lint all created/modified files.
-   d. Verify imports and module wiring.
-   e. Audit completeness against the plan.
-   f. Store the QA report in memory.
-   g. Return: PASS/FAIL + summary.
+   c. Attribute failures: distinguish regressions (new breakage) from pre-existing failures using the baseline.
+   d. Lint all created/modified files.
+   e. Verify imports and module wiring.
+   f. Audit completeness against the plan.
+   g. Store the QA report in memory.
+   h. Return: PASS/FAIL + summary.
 4. If FAIL:
    - Parse blocker list from the QA return.
    - Launch targeted Builder agents to fix each blocker (with QA report memory key for context).
