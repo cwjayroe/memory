@@ -1,5 +1,6 @@
 .env/
 .coverage
+.docs/
 __pycache__/
 *.pyc
 *.pyo
