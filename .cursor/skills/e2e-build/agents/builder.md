@@ -1,25 +1,21 @@
 # Agent: Builder
 
-Execute a build task — create a new file or modify an existing one. This is a unified agent: it decides the approach based on whether the target file exists.
+Execute a build task — create a new file or modify an existing one. Decide the approach based on whether the target file exists.
 
 ## Inputs (provided in task prompt)
 
 - `repo`: Repository name.
 - `build_id`: Unique build identifier.
-- `architecture_snapshot_key`: Memory key for the architecture snapshot.
-- `phase_spec_key`: Memory key for the current phase specification.
-- `result_key`: Memory key where the builder should store its result.
+- `architecture_snapshot`: The full architecture snapshot (passed directly in the task description).
 - `task_spec`: The specific task to execute (file path, description, spec, depends_on).
 
 ## Protocol
 
-### 1. Fetch context from memory
+### 1. Read provided context
 
-Use `get_memory` to retrieve:
-- The architecture snapshot (from `architecture_snapshot_key`) — for understanding the codebase layout, patterns, and conventions.
-- The phase spec (from `phase_spec_key`) — for understanding where this task fits in the broader build.
+Read the architecture snapshot and task spec from the task description. These contain the codebase layout, patterns, conventions, and detailed requirements for the task.
 
-### 2. Assess the target
+### 2a. Assess the target
 
 Check if the target file exists:
 - **If creating a new file**: list the target directory and read 1-2 sibling files of the same type to infer conventions:
@@ -56,7 +52,6 @@ Follow the spec provided in the task prompt. Universal rules:
 - No method longer than ~40 lines. Break into helpers if needed.
 - No comments that narrate what the code does. Only comments for non-obvious intent, trade-offs, or constraints.
 - Match the import ordering and grouping of sibling files.
-- For Python files: `from __future__ import annotations` at the top (if the codebase uses it).
 
 **When creating a new file:**
 - Write the complete file per the spec.
@@ -75,23 +70,12 @@ Follow the spec provided in the task prompt. Universal rules:
 
 Run `ReadLints` on every file touched. Fix any linter errors introduced by the changes.
 
-### 5. Store result in memory
+### 5. Return result
 
-Store a brief result summary at the `result_key`:
-```
-store_memory(
-  content=<result summary>,
-  category="code",
-  source_kind="summary",
-  priority="normal",
-  upsert_key=result_key,
-  repo=repo,
-  tags=["e2e-build", build_id]
-)
-```
+Return a structured result summary to the coordinator:
 
-Result content:
 ```
+===BUILDER_RESULT===
 Task: {description}
 Action: created | modified
 File: {file_path}
@@ -102,19 +86,9 @@ Test file: {path to associated test file}
 Lint: clean | {count} issues remaining
 ```
 
-### 6. Report
-
-Return to the coordinator (≤15 lines):
-```
-File: {path}
-Action: created | modified
-Summary: {what was done}
-Public API: {key names}
-Lint: clean | issues
-```
-
 ## Anti-patterns
 
+- Do not call any MCP tools. All context is provided in the task description.
 - Do not create README, CHANGELOG, or documentation files unless the spec explicitly requests them.
 - Do not add dependencies (pip install, npm install) without using the package manager.
 - Do not generate binary content, long hashes, or placeholder data.

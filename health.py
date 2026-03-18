@@ -40,10 +40,10 @@ def _check_embedding_model() -> dict[str, Any]:
     start = time.time()
     try:
         from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("multi-qa-MiniLM-L6-cos-v1")
+        model = SentenceTransformer("BAAI/bge-large-en-v1.5")
         _ = model.encode(["health check"])
         latency_ms = int((time.time() - start) * 1000)
-        return {"status": "ok", "latency_ms": latency_ms, "model": "multi-qa-MiniLM-L6-cos-v1"}
+        return {"status": "ok", "latency_ms": latency_ms, "model": "BAAI/bge-large-en-v1.5"}
     except Exception as exc:
         return {"status": "error", "latency_ms": int((time.time() - start) * 1000), "detail": str(exc)}
 

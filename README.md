@@ -67,12 +67,14 @@ See [docs/ingestion-guide.md](docs/ingestion-guide.md) for full ingestion docume
 ---
 
 ## What it supports
+
 - scoped memories keyed by `project_id`
 - many repos per scope through a manifest (`projects.yaml`)
 - layered context preload and query-centered retrieval with optional exact-body follow-up
 - repo/file ingestion, pruning, manifest bootstrap, and retention-policy runs
 
 ## Example scope shapes
+
 - `engineering-standards`: shared coding and architecture guidance
 - `billing-domain`: cross-repo context for a subsystem or business area
 - `migration-2026`: initiative or workstream context spanning many repos
@@ -82,18 +84,21 @@ See [docs/ingestion-guide.md](docs/ingestion-guide.md) for full ingestion docume
 
 Detailed documentation lives in the `docs/` directory:
 
-| Document | Contents |
-|----------|----------|
-| [docs/architecture.md](docs/architecture.md) | System architecture, component map, data flow diagrams, design decisions |
-| [docs/mcp-tools-reference.md](docs/mcp-tools-reference.md) | Full parameter reference for all 30 MCP tools with examples |
-| [docs/configuration.md](docs/configuration.md) | All environment variables, manifest schema reference, scope resolution walkthrough |
-| [docs/scoring-and-ranking.md](docs/scoring-and-ranking.md) | Hybrid scoring formula, ranking modes, candidate packing, tuning guide |
-| [docs/ingestion-guide.md](docs/ingestion-guide.md) | Chunking modes, all CLI subcommands, deduplication, watch mode, retention policy tiers |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Common errors, health check guide, debugging techniques |
+
+| Document                                                   | Contents                                                                               |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)               | System architecture, component map, data flow diagrams, design decisions               |
+| [docs/mcp-tools-reference.md](docs/mcp-tools-reference.md) | Full parameter reference for all 30 MCP tools with examples                            |
+| [docs/configuration.md](docs/configuration.md)             | All environment variables, manifest schema reference, scope resolution walkthrough     |
+| [docs/scoring-and-ranking.md](docs/scoring-and-ranking.md) | Hybrid scoring formula, ranking modes, candidate packing, tuning guide                 |
+| [docs/ingestion-guide.md](docs/ingestion-guide.md)         | Chunking modes, all CLI subcommands, deduplication, watch mode, retention policy tiers |
+| [docs/troubleshooting.md](docs/troubleshooting.md)         | Common errors, health check guide, debugging techniques                                |
+
 
 ---
 
 ## Repo layout
+
 - `mcp_server.py`: MCP server exposing retrieval, CRUD, and maintenance tools
 - `ingest.py`: CLI for ingest, note capture, pruning, manifest updates, and policy runs
 - `memory_types.py`: typed request and namespace parsing models
@@ -109,6 +114,7 @@ Detailed documentation lives in the `docs/` directory:
 - `skills/project-memory/SKILL.md`: Codex skill for preload and capture workflows
 
 ## Install
+
 Create or activate a Python environment, then install dependencies from repo root:
 
 ```bash
@@ -116,12 +122,14 @@ python -m pip install -r requirements.txt
 ```
 
 Important runtime dependencies:
+
 - `ollama`: used for the mem0 LLM config
 - `chromadb`: vector store backing mem0
 - `pypdf`: required for PDF ingestion
 - transformer/reranker packages: used by the search reranker pipeline
 
 ## Run tests
+
 Run the suite from repo root:
 
 ```bash
@@ -144,6 +152,7 @@ python -m pytest -q tests \
 Coverage uses [.coveragerc](.coveragerc) when you run `pytest` with `--cov`; it sets `fail_under = 70`, omits `tests/`, `.artifacts/`, `skills/`, `.venv/`, and writes html/json/xml under `.artifacts/coverage/`. You can also run `python -m pytest -q --cov=. --cov-report=term-missing` and rely on `.coveragerc` for other options.
 
 ### Examples script
+
 [examples.py](examples.py) spawns the MCP server as a subprocess and runs async examples (list tools, search_context, store/list/delete). Use it to sanity-check the server or as a reference for programmatic MCP usage:
 
 ```bash
@@ -151,22 +160,26 @@ python examples.py
 ```
 
 ## Manifest model
+
 `projects.yaml` is the source of truth.
 
 The current schema uses `projects`, `project_id`, and `default_active_project` as field names for compatibility. Those entries can still represent any context scope, not only software projects.
 
 Top-level sections:
+
 - `defaults`: ranking and preload defaults
 - `projects`: scope metadata and associated repos, keyed by `project_id`
 - `repos`: repo roots, include/exclude globs, default tags, and `default_active_project`
 - `context_packs`: reusable preload definitions such as `default_3_layer`
 
 Active-scope resolution generally follows:
+
 1. explicit override
 2. repo `default_active_project`
 3. `PROJECT_ID` env fallback
 
 ## MCP server
+
 The MCP server lives in `mcp_server.py` and registers as `memory`.
 
 Run it directly from repo root:
@@ -176,6 +189,7 @@ python mcp_server.py
 ```
 
 ### MCP tools
+
 - `search_context`
 - `store_memory`
 - `list_memories`
@@ -190,6 +204,7 @@ python mcp_server.py
 - `clear_memories`
 
 ### Additional MCP tools
+
 - `update_memory`: update an existing memory's body and/or metadata (patch semantics; supply only fields to change). Required: `memory_id`; optional: `body`, `repo`, `source_path`, `source_kind`, `category`, `module`, `tags`, `priority`.
 - `find_similar`: find memories semantically similar to a given text or an existing memory ID (for dedup review or related-context discovery). Optional: `project_id`, `memory_id`, `text`, `limit`, `threshold`, `response_format`. Provide either `memory_id` or `text`.
 - `bulk_store`: store multiple memories in one call; returns per-item success/error. Required: `memories` (array of objects with `content`); optional: `project_id`. Each item can include `repo`, `source_path`, `source_kind`, `category`, `module`, `tags`, `upsert_key`, `fingerprint`, `priority`.
@@ -201,6 +216,7 @@ python mcp_server.py
 - `summarize_scope`: generate a prose summary of scope contents (grouped by category) using the configured LLM. Optional: `project_id`, `repo`, `category`, `max_tokens`.
 
 ### Graph and entity tools
+
 These tools require `PROJECT_MEMORY_SQLITE_ENABLED=true` (default). They operate on the knowledge graph stored in SQLite.
 
 - `link_memories`: create a typed relation between two memories. Required: `source_id`, `target_id`. Optional: `relation` (`supersedes`, `implements`, `depends_on`, `related_to`, `contradicts`, `refines`; default `related_to`), `project_id`, `confidence` (0.0–1.0).
@@ -216,18 +232,23 @@ These tools require `PROJECT_MEMORY_SQLITE_ENABLED=true` (default). They operate
 For full parameter tables and usage examples for all 30 tools, see [docs/mcp-tools-reference.md](docs/mcp-tools-reference.md).
 
 ### Project stats (`get_stats`)
+
 Use the `get_stats` MCP tool to inspect a scope without running search or embeddings. Arguments: `project_id` (optional; defaults to configured scope), `repo` (optional filter). The response is JSON with: `total_memories`, `estimated_tokens`, `oldest_updated_at`, `newest_updated_at`, `duplicate_fingerprints`, and breakdowns `by_category`, `by_repo`, `by_source_kind`, `by_priority`. Useful for audits and capacity checks.
 
 ### `search_context`
+
 Required:
+
 - `query`
 
 Scope:
+
 - `project_id`: explicit single-scope selector; this is the current interface name
 - `project_ids`: explicit multi-scope selector; this is the current interface name
 - if omitted, scope is inferred from query text plus manifest metadata
 
 Filters:
+
 - `repo`
 - `path_prefix`
 - `tags`
@@ -237,6 +258,7 @@ Filters:
 - `search_all_scopes`: search across all manifest scopes (ignores `project_id` / `project_ids`)
 
 Ranking controls:
+
 - `ranking_mode`: `hybrid_weighted_rerank` or `hybrid_weighted`
 - `token_budget`
 - `candidate_pool`
@@ -245,11 +267,13 @@ Ranking controls:
 - `debug`
 
 Response controls:
+
 - `response_format`: `text` or `json`
 - `include_full_text`: include full selected bodies in json/text responses when supported
 - `excerpt_chars`: excerpt size clamp for text-oriented payloads
 
 Search behavior:
+
 - text responses are concise and query-centered, not raw prefix dumps
 - response headers include `scope_source` and `resolved_projects`
 - if inferred scope returns no results, the server retries once with `PROJECT_ID + org_practice_projects`
@@ -257,16 +281,20 @@ Search behavior:
 - use `get_memory` after search when you need the full untruncated body for one result
 
 ### `list_memories` and `get_memory`
+
 - `list_memories` supports `response_format`, `include_full_text`, and `excerpt_chars`; and `sort_by` (e.g. `updated_at`, `created_at`, `category`, `repo`) and `sort_order` (`asc` / `desc`)
 - default list output is excerpted/snippet-oriented
 - `get_memory` is the exact-read endpoint for one `memory_id`
 - `get_memory` returns the full stored body in both text and json modes
 
 ### `store_memory`
+
 - In addition to the fields in the tool list, `store_memory` supports `priority` (high/normal/low; affects ranking weight) and `suggest_tags` (return suggested tags extracted from the body).
 
 ### Maintenance tools
+
 The MCP server also exposes maintenance operations for repo workflows:
+
 - `ingest_repo`: ingest all files for a manifest-backed repo profile
 - `ingest_file`: ingest one file and merge manifest-backed repo default tags
 - `context_plan`: preview the resolved layered context payloads for a repo
@@ -276,19 +304,23 @@ The MCP server also exposes maintenance operations for repo workflows:
 - `clear_memories`: delete all memories for a selected scope after explicit confirmation
 
 ## Runtime configuration
+
 Environment variables currently used by the repo:
 
 Core/project defaults:
+
 - `PROJECT_ID`: fallback scope key when explicit or inferred scope is unavailable
 - `PROJECT_MEMORY_ROOT`: local storage root for per-scope Chroma collections
 - `PROJECT_MEMORY_GET_ALL_LIMIT`: max item count used for broad list/get-all operations
 
 Manifest and inference:
+
 - `PROJECT_MEMORY_MANIFEST_PATH`: manifest path; defaults to repo-local `projects.yaml`
 - `PROJECT_MEMORY_MAX_PROJECTS`: maximum projects per search request
 - `PROJECT_MEMORY_INFERENCE_MAX_PROJECTS`: cap for inferred project candidates
 
 Ranking and reranking:
+
 - `PROJECT_MEMORY_RANKING_MODE`
 - `PROJECT_MEMORY_DEFAULT_TOKEN_BUDGET`
 - `PROJECT_MEMORY_MIN_TOKEN_BUDGET`
@@ -298,16 +330,19 @@ Ranking and reranking:
 - `PROJECT_MEMORY_RERANKER_MODEL`
 
 Timeouts and cache:
+
 - `PROJECT_MEMORY_PROJECT_SEARCH_TIMEOUT_SECONDS`
 - `PROJECT_MEMORY_GLOBAL_SEARCH_TIMEOUT_SECONDS`
 - `PROJECT_MEMORY_CACHE_TTL_SECONDS`
 - `PROJECT_MEMORY_CACHE_MAX_ENTRIES`
 
 mem0/Ollama wiring:
+
 - `OLLAMA_BASE_URL`
 - `OLLAMA_MODEL`
 
 ## CLI workflows
+
 The documented CLI path is direct script invocation from repo root:
 
 ```bash
@@ -315,6 +350,7 @@ python ingest.py --help
 ```
 
 ### Common commands
+
 The examples below are illustrative. Replace scope IDs such as `engineering-standards`, `billing-domain`, `migration-2026`, and `customer-escalation-acme` with your own `project_id` values.
 
 Create or update a scope entry in the manifest (`--project` is the current CLI flag name):
@@ -409,6 +445,7 @@ python ingest.py clear \
 ```
 
 ### Export, import, and watch
+
 Export all memories for a scope to newline-delimited JSON (default: stdout; use `--output` to write to a file):
 
 ```bash
@@ -438,12 +475,14 @@ python ingest.py watch \
 ```
 
 ## PDF ingestion
+
 - PDFs require `pypdf`
 - PDF text is chunked with page provenance and structured boundaries before raw character chunking
 - stored PDF chunks keep labels such as `page-7::chunk-2`
 - re-ingest affected PDFs after chunking changes; existing stored chunks are not rewritten automatically
 
 ### Ingest a single PDF
+
 If your manifest includes a repo profile for documents, ingest the PDF through that repo. This repo already includes a `product-docs` profile in `projects.yaml`; in your own setup, that profile can support any scope shape.
 
 ```bash
@@ -457,11 +496,13 @@ python ingest.py file \
 ```
 
 Notes:
+
 - the CLI still accepts `--mode`, but `.pdf` files always use the PDF-specific chunker
 - repo `default_tags` are merged with the tags you pass; for `product-docs` that means `product-docs` and `prd` are added automatically
 - existing chunks for the same source path are deleted before the PDF is re-ingested
 
 ### Ingest all PDFs from a manifest-backed docs repo
+
 If you want to ingest every matching file from the repo profile root:
 
 ```bash
@@ -474,18 +515,22 @@ python ingest.py repo \
 The `product-docs` profile currently includes `**/*.pdf`, `**/*.md`, `**/*.rst`, and `**/*.txt`, so this will ingest all matching documents under that configured root.
 
 ### What gets stored
+
 - each PDF page is split into structured blocks before chunking
 - stored chunks use `source_kind="doc"` and `category="documentation"`
 - each chunk records page provenance in labels like `path/to/file.pdf::page-1::chunk-2`
 - if a PDF has no extractable text, ingestion stores a placeholder documentation chunk instead of silently skipping the file
 
 ## Retention policy
+
 `policy-run` currently applies three broad rules:
+
 - Tier A: `decision` and `architecture` are protected from auto-prune
 - Tier B: `summary` items are capped per `(repo, topic key)` by `summary_keep`
 - Tier C: `code` and `documentation` items can be pruned by duplicate fingerprint and age
 
 ## Codex skill
+
 Use `skills/project-memory/SKILL.md` for conversation startup, context preload, and durable decision capture.
 
 The skill is MCP-only. Use the CLI or explicit maintenance MCP tools when you need repo ingestion or manifest maintenance.
@@ -493,6 +538,7 @@ The skill is MCP-only. Use the CLI or explicit maintenance MCP tools when you ne
 The AGENTS snippet lives in `skills/project-memory/references/agents-snippet.md`.
 
 ## Debugging
+
 For quick local debugging, run the server directly:
 
 ```bash
@@ -510,6 +556,7 @@ Then attach your IDE debugger to `127.0.0.1:5678`.
 If you want to script MCP calls against the local server, point your client at repo-local entrypoints such as `./mcp_server.py` and set `PROJECT_ID` in the spawned environment.
 
 ## Troubleshooting
+
 - If a relevant stored rule does not appear in text mode, retry with `response_format="json"` and inspect result IDs plus excerpt metadata.
 - If you need the exact stored body for one result, call `get_memory` with the returned `memory_id`.
 - If a PDF-derived result looks too broad or too old, re-ingest the source PDF so the current chunker replaces older stored chunks.
