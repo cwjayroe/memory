@@ -7,6 +7,7 @@ from dataclasses import replace
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -973,6 +974,131 @@ async def _handle_detect_duplicates(arguments: dict[str, Any]) -> list[TextConte
     return [TextContent(type="text", text="\n".join(lines))]
 
 
+# ---------------------------------------------------------------------------
+# Code execution handlers
+# ---------------------------------------------------------------------------
+
+_TOOLS_DIR = Path(__file__).parent / "code_execution" / "tools" / "memory"
+_wrappers_generated = False
+
+
+def _ensure_wrappers() -> None:
+    """Lazily generate tool wrapper files on first use."""
+    global _wrappers_generated
+    if _wrappers_generated:
+        return
+    # Check if wrappers already exist (more than just __init__.py)
+    existing = [f for f in _TOOLS_DIR.glob("*.py") if f.name != "__init__.py"]
+    if existing:
+        _wrappers_generated = True
+        return
+    # Generate wrappers from current tool definitions
+    import asyncio
+    from code_execution.generate import generate_wrappers
+
+    async def _get_tools():
+        return await list_tools()
+
+    try:
+        loop = asyncio.get_running_loop()
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            tools = pool.submit(asyncio.run, _get_tools()).result()
+    except RuntimeError:
+        tools = asyncio.run(_get_tools())
+
+    generate_wrappers(tools, _TOOLS_DIR)
+    _wrappers_generated = True
+
+
+async def _handle_execute_code(arguments: dict[str, Any]) -> list[TextContent]:
+    _ensure_wrappers()
+
+    code = arguments.get("code", "")
+    if not code.strip():
+        return [TextContent(type="text", text="No code provided.")]
+
+    timeout = 30
+    try:
+        timeout = max(1, min(int(arguments.get("timeout", 30)), 60))
+    except (TypeError, ValueError):
+        pass
+
+    from code_execution.sandbox import execute_code
+
+    result = await execute_code(code, timeout=timeout)
+
+    parts: list[str] = []
+    if result.get("stdout"):
+        parts.append(f"=== stdout ===\n{result['stdout']}")
+    if result.get("return_value") is not None:
+        parts.append(f"=== result ===\n{result['return_value']}")
+    if result.get("stderr"):
+        parts.append(f"=== stderr ===\n{result['stderr']}")
+    if result.get("error"):
+        parts.append(f"=== error ===\n{result['error']}")
+    if not parts:
+        parts.append("(no output)")
+
+    return [TextContent(type="text", text="\n\n".join(parts))]
+
+
+async def _handle_list_code_tools(arguments: dict[str, Any]) -> list[TextContent]:
+    _ensure_wrappers()
+
+    detail = arguments.get("detail", "summary")
+    if detail not in ("names", "summary", "full"):
+        detail = "summary"
+
+    tool_files = sorted(
+        f for f in _TOOLS_DIR.glob("*.py")
+        if f.name not in ("__init__.py", "_bridge.py")
+    )
+
+    if not tool_files:
+        return [TextContent(type="text", text="No code tools available. Call execute_code first to trigger generation.")]
+
+    lines: list[str] = []
+    for tf in tool_files:
+        func_name = tf.stem
+        if detail == "names":
+            lines.append(func_name)
+        elif detail == "summary":
+            # Extract the first line of the module docstring
+            source = tf.read_text(encoding="utf-8")
+            first_line = ""
+            if source.startswith('"""'):
+                end = source.find('"""', 3)
+                if end > 3:
+                    first_line = source[3:end].split("\n")[0].strip()
+            lines.append(f"  {func_name}: {first_line}")
+        else:  # full
+            source = tf.read_text(encoding="utf-8")
+            lines.append(f"--- {func_name} ---")
+            lines.append(source)
+            lines.append("")
+
+    header = f"Available memory tools ({len(tool_files)}):"
+    return [TextContent(type="text", text=header + "\n" + "\n".join(lines))]
+
+
+async def _handle_get_tool_source(arguments: dict[str, Any]) -> list[TextContent]:
+    _ensure_wrappers()
+
+    tool_name = arguments.get("tool_name", "")
+    # Sanitize
+    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", tool_name):
+        return [TextContent(type="text", text=f"Invalid tool name: {tool_name!r}")]
+
+    tool_path = _TOOLS_DIR / f"{tool_name}.py"
+    if not tool_path.exists():
+        available = sorted(f.stem for f in _TOOLS_DIR.glob("*.py") if f.name != "__init__.py")
+        return [TextContent(type="text", text=f"Tool '{tool_name}' not found. Available: {', '.join(available)}")]
+
+    source = tool_path.read_text(encoding="utf-8")
+    return [TextContent(type="text", text=source)]
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "search_context":
@@ -1035,6 +1161,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _handle_consolidate_memories(arguments)
     elif name == "detect_duplicates":
         return await _handle_detect_duplicates(arguments)
+    elif name == "execute_code":
+        return await _handle_execute_code(arguments)
+    elif name == "list_code_tools":
+        return await _handle_list_code_tools(arguments)
+    elif name == "get_tool_source":
+        return await _handle_get_tool_source(arguments)
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -1671,6 +1803,70 @@ async def list_tools() -> list[Tool]:
                     "category": {"type": "string", "description": "Filter to a specific category"},
                     "response_format": {"type": "string", "enum": ["text", "json"], "default": "text"},
                 },
+            },
+        ),
+        # ---- Code Execution tools ----
+        Tool(
+            name="execute_code",
+            description=(
+                "Execute Python code in a sandboxed environment with access to memory tool "
+                "wrappers. Import tools from 'code_execution.tools.memory' (e.g., "
+                "'from code_execution.tools.memory import search_context, store_memory'). "
+                "Intermediate results stay in the sandbox; only explicitly printed output "
+                "or the __result__ variable value is returned. Use this to compose multiple "
+                "tool calls, filter large result sets, or perform complex operations in one step."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute. Use print() for output or assign to __result__.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Max execution time in seconds (1-60)",
+                    },
+                },
+                "required": ["code"],
+            },
+        ),
+        Tool(
+            name="list_code_tools",
+            description=(
+                "List available memory tool wrapper functions for use with execute_code. "
+                "Returns function names, descriptions, and optionally full signatures. "
+                "Use this for on-demand tool discovery instead of loading all tool definitions."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "detail": {
+                        "type": "string",
+                        "enum": ["names", "summary", "full"],
+                        "default": "summary",
+                        "description": (
+                            "Level of detail: 'names' for function names only, "
+                            "'summary' for name + description, "
+                            "'full' for complete source code with signatures and docstrings"
+                        ),
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="get_tool_source",
+            description="Read the full source code of a specific memory tool wrapper function, including its typed signature and docstring.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Name of the tool (e.g., 'search_context', 'store_memory')",
+                    },
+                },
+                "required": ["tool_name"],
             },
         ),
     ]
