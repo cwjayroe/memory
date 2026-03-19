@@ -62,6 +62,23 @@ For each task in the batch, verify the built code implements what the spec descr
 - Documented behavior cases are handled (check for conditionals, error handling, edge cases mentioned in the spec).
 - Integration points are wired (imports exist, function calls are in place).
 
+### 6b. Interface contract validation
+
+If the task spec includes `interface_contract`:
+- **`produces`**: Verify every listed export exists in the built file with the **exact signature** specified. Flag any deviations in parameter names, types, or return types.
+- **`consumes`**: Verify every listed import resolves to an actual export in the source file with a compatible signature.
+- **`types_shared_with`**: Verify referenced types are consistent (same names, same fields) across the listed files.
+
+Interface contract violations are blockers — they will cause downstream tasks to fail.
+
+### 6c. Preserve-list validation
+
+If the task spec includes `preserve`:
+- For each entry in the `preserve` list, verify the built code still satisfies the constraint.
+- Check that preserved function signatures have not changed.
+- Check that preserved behaviors are still intact (existing callers would still work).
+- Any `preserve` violation is a blocker.
+
 ### 7. Cross-file consistency
 
 If multiple files were touched in the same batch:
@@ -107,6 +124,14 @@ Regression issues: [count]
 
 Spec compliance issues: [count]
   - [file] [task] — [what's missing or wrong]
+
+Interface contract violations: [count]
+  - [file] produces [name] with [actual signature] but contract specifies [expected signature]
+  - [file] missing produce: [expected export]
+  - [file] consumes [import] but source has [incompatible signature]
+
+Preserve violations: [count]
+  - [file] — [preserve entry] was violated: [what changed]
 
 Cross-file issues: [count]
   - [files] — [inconsistency]

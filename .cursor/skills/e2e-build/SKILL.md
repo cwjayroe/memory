@@ -9,11 +9,12 @@ Accept a feature request from the user's prompt. Plan it, build it, QA it. The c
 
 ## Agents
 
-This skill bundles four purpose-built agents. None of them call MCP tools — they receive all context in the task description and return structured output to the coordinator.
+This skill bundles five purpose-built agents. None of them call MCP tools — they receive all context in the task description and return structured output to the coordinator.
 
-- **Planner** (`agents/planner.md`): Analyzes prompt and codebase → returns architecture snapshot + structured phased plan.
+- **Planner** (`agents/planner.md`): Two-pass analysis — deep codebase exploration then detailed specification. Returns codebase analysis, architecture snapshot, and phased plan with enriched task specs (interface contracts, pattern references, test strategies).
+- **Plan Validator** (`agents/plan-validator.md`): Lightweight validation of the plan before building. Checks dependency graph, interface contract alignment, completeness, and file conflicts.
 - **Builder** (`agents/builder.md`): Creates new files or modifies existing ones → returns result summary.
-- **Reviewer** (`agents/reviewer.md`): Per-phase correctness review including spec compliance and cross-file consistency → returns review report.
+- **Reviewer** (`agents/reviewer.md`): Per-phase correctness review including spec compliance, interface contract validation, and cross-file consistency → returns review report.
 - **QA** (`agents/qa.md`): End-to-end quality assurance — tests, coverage, lint, imports, completeness audit → returns QA report.
 
 ## Memory Key Schema
@@ -23,9 +24,11 @@ All inter-phase state is persisted to memory MCP by the coordinator using determ
 | Phase | Upsert Key | Category | Source Kind | Priority |
 |-------|-----------|----------|-------------|----------|
 | Input | `{repo}::e2e-build::{build_id}::input-doc` | documentation | reference | high |
+| Plan | `{repo}::e2e-build::{build_id}::codebase-analysis` | architecture | summary | high |
 | Plan | `{repo}::e2e-build::{build_id}::architecture-snapshot` | architecture | summary | high |
 | Plan | `{repo}::e2e-build::{build_id}::plan` | architecture | summary | high |
 | Plan | `{repo}::e2e-build::{build_id}::plan-phase-{N}` | architecture | summary | normal |
+| Plan | `{repo}::e2e-build::{build_id}::plan-validation` | decision | summary | normal |
 | Build | `{repo}::e2e-build::{build_id}::phase-{N}-task-{T}-result` | code | summary | normal |
 | Build | `{repo}::e2e-build::{build_id}::progress` | architecture | summary | high |
 | Review | `{repo}::e2e-build::{build_id}::review-phase-{N}` | code | summary | normal |
@@ -70,7 +73,9 @@ All writes use `upsert_key` for idempotency. All writes include `tags=["e2e-buil
    - If no test suite exists (brand new project), store: "No pre-existing test suite."
 5. Retain `build_id`, `repo`, and the full prompt text for the planner.
 
-### Phase 1: Plan (Planner Agent)
+### Phase 1: Plan (Planner Agent + Validation)
+
+**1a. Launch planner**
 
 1. Read `agents/planner.md` from this skill folder.
 2. Optionally, retrieve prior architectural context for the planner:
@@ -85,13 +90,16 @@ All writes use `upsert_key` for idempotency. All writes include `tags=["e2e-buil
    If results are returned, include them in the planner's task prompt as prior context.
 3. Launch a single `Task` with `subagent_type="generalPurpose"`:
    - Prompt includes: planner protocol + **the full user prompt** (passed directly) + repo name + any prior context from step 2.
-   - The planner explores the codebase and produces output. It does NOT call any MCP tools.
-   - Returns: architecture snapshot, plan, and per-phase specs as structured text delimited by markers.
+   - The planner does NOT call any MCP tools. It works in two passes:
+     - **Pass 1 — Deep Exploration**: Reads actual file contents, traces call chains, extracts code patterns, analyzes modification impact, discovers test patterns.
+     - **Pass 2 — Specification**: Using the exploration results, produces architecture snapshot, phased plan with enriched task specs (including `existing_api`, `preserve`, `interface_contract`, `pattern_reference`, `test_strategy`).
+   - Returns structured text delimited by markers: `===CODEBASE_ANALYSIS===`, `===ARCHITECTURE_SNAPSHOT===`, `===PLAN===`, `===PHASE_N===`, `===SUMMARY===`.
 4. **Coordinator persists** the planner's output using `bulk_store`:
    ```
    bulk_store(
      project_id=<active_scope>,
      memories=[
+       { content: <codebase analysis>, category: "architecture", source_kind: "summary", priority: "high", upsert_key: "{repo}::e2e-build::{build_id}::codebase-analysis", repo: "{repo}", tags: ["e2e-build", build_id, "codebase-analysis"] },
        { content: <architecture snapshot>, category: "architecture", source_kind: "summary", priority: "high", upsert_key: "{repo}::e2e-build::{build_id}::architecture-snapshot", repo: "{repo}", tags: ["e2e-build", build_id] },
        { content: <plan>, category: "architecture", source_kind: "summary", priority: "high", upsert_key: "{repo}::e2e-build::{build_id}::plan", repo: "{repo}", tags: ["e2e-build", build_id] },
        { content: <phase 1 spec>, category: "architecture", source_kind: "summary", priority: "normal", upsert_key: "{repo}::e2e-build::{build_id}::plan-phase-1", repo: "{repo}", tags: ["e2e-build", build_id, "phase-1"] },
@@ -100,6 +108,39 @@ All writes use `upsert_key` for idempotency. All writes include `tags=["e2e-buil
    )
    ```
 5. Parse the planner's `===SUMMARY===` section. Initialize todos from phase summaries.
+
+**1b. Validate plan**
+
+1. Read `agents/plan-validator.md` from this skill folder.
+2. Launch a single `Task` with `subagent_type="generalPurpose"` and `model="fast"`:
+   - Prompt includes: validator protocol + plan content + all phase spec contents + architecture snapshot (all passed directly).
+   - The validator does NOT call any MCP tools.
+   - Returns structured text with `===VALIDATION_REPORT===` marker.
+3. **Coordinator stores** the validation report:
+   ```
+   store_memory(
+     content=<validation report>,
+     category="decision",
+     source_kind="summary",
+     priority="normal",
+     upsert_key="{repo}::e2e-build::{build_id}::plan-validation",
+     repo="{repo}",
+     tags=["e2e-build", build_id, "validation"]
+   )
+   ```
+4. If FAIL: re-launch planner with the validation report as additional context (max 1 correction cycle). If still FAIL after correction: surface issues to user and halt.
+
+**1c. Approval gate** (default: pause for review)
+
+Present the user with:
+- Plan summary (phases, task counts, file lists)
+- Interface contracts (cross-task boundaries)
+- Assumptions and ambiguities flagged by the planner
+- Validation result (PASS/FAIL and any warnings)
+
+Wait for user confirmation before proceeding to Phase 2.
+
+**Opt-out**: If the user's prompt contains keywords like "just build it", "autonomous", "no approval", or "skip review": proceed directly to Phase 2 without pausing.
 
 ### Phase 2: Build (Builder Agent - Sequential Execution)
 
