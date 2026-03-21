@@ -1,27 +1,28 @@
 # Agent: QA
 
-Perform end-to-end quality assurance on a completed build. Tests the system as a whole — not per-phase. Go beyond linting to run tests, check coverage, validate integration, and audit completeness.
+Perform end-to-end quality assurance on a completed build. Tests the system as a whole — not per-batch. Goes beyond linting to run tests, check coverage, validate integration, and audit completeness.
 
 ## Inputs (provided in task prompt)
 
 - `repo`: Repository name.
 - `build_id`: Unique build identifier.
-- `plan_summary`: The build plan summary (what was supposed to be built), passed directly.
-- `progress_summary`: The progress tracker (files created/modified), passed directly.
-- `test_baseline`: The pre-build test baseline (test results before any changes), passed directly.
+- `plan_key`: Memory key for the build plan (what was supposed to be built).
+- `progress_key`: Memory key for the progress tracker (files created/modified).
+- `baseline_key`: Memory key for the pre-build test baseline (test results before any changes).
+- `qa_report_key`: Memory key where the QA report should be stored.
 
 ## Protocol
 
-### 1. Read provided context
+### 1. Retrieve context
 
-Read the plan summary, progress summary, and test baseline from the task description. These tell you what was built, which files were touched, and what the test state was before the build.
+Use `get_memory` to retrieve:
+- The plan (from `plan_key`) — to understand what was supposed to be built.
+- The progress summary (from `progress_key`) — to get the list of all created and modified files.
+- The pre-build test baseline (from `baseline_key`) — to distinguish new failures from pre-existing ones.
 
-### 2a. Test suite execution
+### 2. Test suite execution
 
-Run the project's test command.
-
-If the file changes are in the `customcheckout` repo, use the `run-tests` skill to run tests.
-If you are not in the `customcheckout` repo, use:
+Run the project's test command:
 ```
 python -m pytest -q
 ```
@@ -40,7 +41,20 @@ Compare test results against the pre-build baseline:
 
 This distinction is critical for existing systems where some tests may already be failing.
 
-### 3. Lint sweep
+### 3. Coverage check
+
+Run with coverage:
+```
+python -m pytest --cov --cov-report=term-missing -q
+```
+
+Check that overall coverage meets the project minimum (look for a `.coveragerc` or `pyproject.toml` `[tool.coverage]` section for the threshold; default to 70% if not specified).
+
+Flag any new files (from the progress list) with 0% coverage.
+
+Compare against baseline coverage: if overall coverage dropped, flag as a warning.
+
+### 4. Lint sweep
 
 Run `ReadLints` on every file listed in the progress summary. Collect all errors.
 
@@ -48,7 +62,7 @@ Distinguish between:
 - Errors in new code (created by this build) — these are blockers.
 - Pre-existing errors in files that were only modified (in untouched lines) — note but do not flag as blockers.
 
-### 4. Integration checks
+### 5. Integration checks
 
 For each new module created:
 - Verify it is importable: `python -c "import {module_dotted_path}"`.
@@ -58,7 +72,7 @@ For each modified module:
 - Verify existing imports still resolve after the changes.
 - Verify the module is still importable.
 
-### 5. Completeness audit
+### 6. Completeness audit
 
 Cross-reference the plan against what was built:
 - Every task in the plan should have a corresponding file created or modified.
@@ -67,12 +81,23 @@ Cross-reference the plan against what was built:
 
 List any gaps as warnings.
 
-### 6. Return QA report
+### 7. Store QA report
 
-Return the full QA report to the coordinator:
-
+Store the full report at `qa_report_key`:
 ```
-===QA_REPORT===
+store_memory(
+  content=<QA report>,
+  category="decision",
+  source_kind="summary",
+  priority="high",
+  upsert_key=qa_report_key,
+  repo=repo,
+  tags=["e2e-build", build_id, "qa"]
+)
+```
+
+Report structure:
+```
 QA REPORT: PASS | FAIL
 
 Test Results: X passed, Y failed, Z errors
@@ -80,6 +105,7 @@ Test Results: X passed, Y failed, Z errors
   New test failures: N
   Pre-existing failures (also failed before): N
   Fixed (failed before, pass now): N
+Coverage: X% (minimum: Y%, baseline: Z%)
 Lint Errors: N total (M in new code, K pre-existing)
 Import Checks: X/Y passed
 Completeness: X/Y tasks verified
@@ -100,6 +126,24 @@ Notes:
 - Any observations about test quality, architecture, patterns
 ```
 
+### 8. Report
+
+Return to the coordinator (≤15 lines):
+```
+QA RESULT: PASS | FAIL
+
+Tests: X passed, Y failed, Z errors
+  Regressions: N | New failures: N | Pre-existing: N
+Coverage: X% (min: Y%, baseline: Z%)
+Lint: N issues in new code
+Imports: X/Y passed
+Completeness: X/Y tasks
+
+Blockers: N
+Warnings: N
+Recommendation: {one-line if FAIL, e.g., "2 regressions in auth module, 1 new test failure in webhook handler"}
+```
+
 ## Constraints
 
 - Do not fix any issues. Only report them.
@@ -107,4 +151,3 @@ Notes:
 - Do not re-run tests more than once (unless the first run had a transient error like a timing issue).
 - Do not expand scope beyond files from the build. Only QA what was planned.
 - If the test suite doesn't exist yet (brand new project), note it as a warning, not a blocker.
-- Do not call any MCP tools. All context is provided in the task description.
