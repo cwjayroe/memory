@@ -1,13 +1,13 @@
 ---
-name: e2e-build
-description: "Execute a pre-planned implementation. Retrieves the plan from memory (produced by e2e-plan), builds it via sequential delegated agents, reviews each phase, and QAs the result. Invoke with: /e2e-build {build_id}"
+name: feature-build
+description: "Execute a pre-planned feature implementation. Retrieves the plan from memory (produced by /feature-plan), builds it via sequential delegated agents, reviews each phase, and QAs the result. Invoke with: /feature-build {build_id}"
 ---
 
-# E2E Build
+# Feature Build
 
-Execute a plan that was produced by the `e2e-plan` skill. Retrieve it from memory, build it phase by phase, review each phase, and QA the result. The coordinator handles all memory persistence — subagents are pure computation.
+Execute a plan that was produced by the `feature-plan` skill. Retrieve it from memory, build it phase by phase, review each phase, and QA the result. The coordinator handles all memory persistence — subagents are pure computation.
 
-**Prerequisites**: Run `/e2e-plan` first to produce and store the plan. This skill expects the plan to already exist in memory.
+**Prerequisites**: Run `/feature-plan` first to produce and store the plan. This skill expects the plan to already exist in memory.
 
 ## Agents
 
@@ -19,7 +19,7 @@ This skill uses three purpose-built agents. None call MCP tools — they receive
 
 ## Memory Key Schema
 
-The plan artifacts are already stored by `e2e-plan`. This skill reads them and adds build/review/QA artifacts.
+The plan artifacts are already stored by `/feature-plan`. This skill reads them and adds build/review/QA artifacts.
 
 | Phase | Upsert Key | Category | Source Kind | Priority |
 |-------|-----------|----------|-------------|----------|
@@ -40,12 +40,12 @@ All writes use `upsert_key` for idempotency. All writes include `tags=["e2e-buil
 
 ### Phase 0: Retrieve Plan
 
-1. Parse the `build_id` from the user's invocation (e.g., `/e2e-build add-webhook-support-a3f2c1`).
+1. Parse the `build_id` from the user's invocation (e.g., `/build add-webhook-support-a3f2c1`).
 2. Retrieve the plan from memory:
    ```
    get_memory(upsert_key="{repo}::e2e-build::{build_id}::plan")
    ```
-   If not found: tell the user to run `/e2e-plan` first. Halt.
+   If not found: tell the user to run `/feature-plan` first. Halt.
 3. Retrieve the architecture snapshot:
    ```
    get_memory(upsert_key="{repo}::e2e-build::{build_id}::architecture-snapshot")
@@ -196,7 +196,7 @@ Only the coordinator communicates with memory MCP. Subagents receive all context
 
 ## Error Handling
 
-- **Plan not found**: Tell the user to run `/e2e-plan` first. Halt.
+- **Plan not found**: Tell the user to run `/feature-plan` first. Halt.
 - **Builder failure after 3 review retries**: Store failure, skip task, flag in QA.
 - **QA failure after 2 cycles**: Complete with "partial success". Include all known issues.
 - **All errors** stored in memory so they survive context window eviction.
