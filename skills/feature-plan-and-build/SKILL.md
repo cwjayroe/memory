@@ -1,15 +1,15 @@
 ---
-name: full-build
-description: End-to-end planning and building from a single document. Accepts a prompt containing project details (spec, design doc, feature brief), plans the implementation, builds it via delegated agents, and QAs the result — all in one invocation. Use when the user provides a project spec and wants the full lifecycle handled (plan + build + QA), says "build this", "full build", "implement this doc", or wants to avoid the two-step plan-then-build workflow. For planning only, use /plan. For building from an existing plan, use /build.
+name: feature-plan-and-build
+description: End-to-end feature planning and building from a single document. Accepts a prompt containing project details (spec, design doc, feature brief), plans the implementation, builds it via delegated agents, and QAs the result — all in one invocation. Use when the user provides a project spec and wants the full lifecycle handled (plan + build + QA), says "build this feature", "implement this doc", or wants to avoid the two-step plan-then-build workflow. For planning only, use /feature-plan. For building from an existing plan, use /feature-build.
 ---
 
-# Full Build
+# Feature Plan and Build
 
-Accept a single document describing a project. Plan it, build it, QA it — all in one invocation. The coordinator stays lean — memory MCP is the shared state bus; agents fetch what they need via memory keys.
+Accept a single document describing a feature. Plan it, build it, QA it — all in one invocation. The coordinator stays lean — memory MCP is the shared state bus; agents fetch what they need via memory keys.
 
 This is the combined workflow. For the individual steps, see:
-- **`plan`**: Planning only — produces a detailed plan stored in memory.
-- **`build`**: Building only — executes a plan previously produced by `/plan`.
+- **`feature-plan`**: Planning only — produces a detailed plan stored in memory.
+- **`feature-build`**: Building only — executes a plan previously produced by `/feature-plan`.
 
 ## Agents
 
