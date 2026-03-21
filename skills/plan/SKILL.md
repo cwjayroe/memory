@@ -1,13 +1,13 @@
 ---
-name: e2e-plan
-description: "Deep codebase exploration and implementation planning for a feature request. Produces a detailed, phased plan with enriched task specs stored in memory. Run this in Plan mode before invoking e2e-build to execute."
+name: plan
+description: "Deep codebase exploration and implementation planning for a feature request. Produces a detailed, phased plan with enriched task specs stored in memory. Run this before invoking /build to execute."
 ---
 
-# E2E Plan
+# Plan
 
 Explore the codebase deeply, then produce a structured implementation plan that builder agents can execute without re-discovering context. This skill runs in the main agent context (not delegated to a subagent) so it has the full context window for exploration.
 
-The output is a complete plan stored in memory. After reviewing and approving, invoke `/e2e-build {build_id}` to execute it.
+The output is a complete plan stored in memory. After reviewing and approving, invoke `/build {build_id}` to execute it.
 
 ## Memory Key Schema
 
@@ -328,7 +328,7 @@ Show the user:
 - **Interface contracts**: cross-task boundaries
 - **Assumptions**: anything ambiguous that was resolved
 - **Validation**: PASS/warnings
-- **Next step**: `Approve this plan, then run /e2e-build {build_id} to execute.`
+- **Next step**: `Approve this plan, then run /build {build_id} to execute.`
 
 ## Constraints
 
