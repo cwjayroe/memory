@@ -1,7 +1,7 @@
 """Subprocess-based sandbox executor for user-submitted Python code.
 
 Launches ``runner.py`` in a subprocess with:
-* Pipe-based IPC (fd 3/4) for tool calls back to the MCP server.
+* Pipe-based IPC (inherited pipe fds, passed via ``_MCP_FD_OUT`` / ``_MCP_FD_IN``) for tool calls back to the parent.
 * Timeout enforcement.
 * Output capture and truncation.
 """
@@ -113,16 +113,15 @@ async def execute_code(
         tmp.write(code)
         tmp.close()
 
-        # Create pipes for tool-call IPC
-        # child writes on child_w (its fd 3), parent reads on parent_r
+        # Create pipes for tool-call IPC.  ``pass_fds`` keeps the same numeric fds in the
+        # child as in the parent — they are rarely 3 and 4, so expose the real numbers via env.
         parent_r, child_w = os.pipe()
-        # parent writes on parent_w, child reads on child_r (its fd 4)
         child_r, parent_w = os.pipe()
 
         env = os.environ.copy()
         env["_MCP_SANDBOX"] = "1"
-        env["_MCP_FD_OUT"] = "3"
-        env["_MCP_FD_IN"] = "4"
+        env["_MCP_FD_OUT"] = str(child_w)
+        env["_MCP_FD_IN"] = str(child_r)
 
         # Launch subprocess
         proc = subprocess.Popen(

@@ -65,10 +65,16 @@ class TestSandboxErrors:
 
 
 class TestSandboxSecurity:
-    def test_forbidden_import_os(self):
-        result = _run(execute_code('import os'))
-        assert result["error"] is not None
-        assert "not allowed" in result["error"].lower() or "ImportError" in result["error"]
+    def test_allowed_import_os_for_memory_bridge(self):
+        result = _run(execute_code('import os\n__result__ = os.name'))
+        assert result["error"] is None
+        assert result["return_value"]
+
+    def test_memory_wrappers_import_in_sandbox(self):
+        code = "from code_execution.tools.memory import get_stats\n__result__ = 'import_ok'"
+        result = _run(execute_code(code))
+        assert result["error"] is None
+        assert result["return_value"] == "import_ok"
 
     def test_forbidden_import_subprocess(self):
         result = _run(execute_code('import subprocess'))
@@ -78,8 +84,8 @@ class TestSandboxSecurity:
         result = _run(execute_code('import shutil'))
         assert result["error"] is not None
 
-    def test_forbidden_from_import(self):
-        result = _run(execute_code('from os import path'))
+    def test_forbidden_from_import_subprocess(self):
+        result = _run(execute_code('from subprocess import Popen'))
         assert result["error"] is not None
 
     def test_allowed_import_json(self):

@@ -6,7 +6,7 @@ Provides ``call_tool(name, **kwargs) -> str`` which routes to the real
 Two modes:
 * **In-process** (default) — calls the handler directly via ``asyncio``.
 * **Subprocess IPC** — when ``_MCP_SANDBOX`` env-var is set, communicates
-  with the parent process over file-descriptor pipes (fd 3 write / fd 4 read).
+  with the parent over fds from ``_MCP_FD_OUT`` (write) and ``_MCP_FD_IN`` (read).
 """
 
 from __future__ import annotations
@@ -40,9 +40,15 @@ def _call_tool_subprocess(name: str, kwargs: dict[str, Any]) -> str:
     """Send a tool-call request to the parent process over fd-pipe IPC."""
     request = json.dumps({"tool": name, "args": kwargs}) + "\n"
 
-    # fd 3 = write requests to parent, fd 4 = read responses from parent
-    fd_out = int(os.environ.get("_MCP_FD_OUT", "3"))
-    fd_in = int(os.environ.get("_MCP_FD_IN", "4"))
+    fd_out_s = os.environ.get("_MCP_FD_OUT")
+    fd_in_s = os.environ.get("_MCP_FD_IN")
+    if fd_out_s is None or fd_in_s is None:
+        raise RuntimeError(
+            "Subprocess tool IPC requires _MCP_FD_OUT and _MCP_FD_IN "
+            "(set by code_execution.sandbox when spawning the runner)."
+        )
+    fd_out = int(fd_out_s)
+    fd_in = int(fd_in_s)
 
     os.write(fd_out, request.encode())
 

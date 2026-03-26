@@ -22,8 +22,11 @@ from io import StringIO
 # Forbidden-import hook
 # ---------------------------------------------------------------------------
 
+# ``os`` is allowed so ``code_execution.bridge`` can load in the sandbox; it uses
+# ``os.environ`` and ``os.read`` / ``os.write`` on IPC fds for tool calls. User code
+# can therefore import ``os`` as well (same tradeoff as other permissive sandboxes).
 FORBIDDEN_MODULES = frozenset({
-    "os", "subprocess", "shutil", "signal", "socket",
+    "subprocess", "shutil", "signal", "socket",
     "ctypes", "pathlib", "glob", "tempfile",
     "webbrowser", "http", "urllib", "ftplib", "smtplib",
     "multiprocessing", "threading", "concurrent",
@@ -87,8 +90,7 @@ def main() -> None:
     sys.meta_path.insert(0, _ForbiddenImportFinder())
 
     # Remove forbidden modules from sys.modules so user code can't access them
-    # via cached imports. We need os internally, so we save a reference first.
-    _os = os
+    # via cached imports from the runner's own startup.
     for mod_name in list(sys.modules):
         top = mod_name.split(".")[0]
         if top in FORBIDDEN_MODULES:
