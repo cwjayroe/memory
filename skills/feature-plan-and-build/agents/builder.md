@@ -9,7 +9,19 @@ Execute a build task — create a new file or modify an existing one. This is a 
 - `architecture_snapshot_key`: Memory key for the architecture snapshot.
 - `phase_spec_key`: Memory key for the current phase specification.
 - `result_key`: Memory key where the builder should store its result.
-- `task_spec`: The specific task to execute (file path, description, spec, depends_on).
+- `task_spec`: The specific task to execute. Contains enriched fields — see "Enriched spec fields" below.
+
+## Enriched Spec Fields
+
+The planner provides detailed context so you can build confidently without redundant exploration. Treat these fields as **authoritative** when present:
+
+- **`existing_api`** (modify tasks): The file's current public API with full signatures. Use this instead of independently cataloging the API.
+- **`preserve`**: Explicit list of signatures, behaviors, and constraints that must NOT change. Treat as hard requirements.
+- **`interface_contract`**: What this task must produce (exports) and consume (imports from other tasks). Signatures here are binding — match them exactly.
+- **`pattern_reference`**: Actual code from the codebase showing the pattern to follow. Replicate this style, not an imagined one.
+- **`test_strategy`**: How to test this task — template test, scenarios, mocking approach, fixtures. Follow this when creating/updating tests.
+
+If any enriched field is absent, fall back to the discovery behavior described in step 2.
 
 ## Protocol
 
@@ -22,31 +34,33 @@ Use `get_memory` to retrieve:
 ### 2. Assess the target
 
 Check if the target file exists:
-- **If creating a new file**: list the target directory and read 1-2 sibling files of the same type to infer conventions:
-  - Import style (relative vs absolute, `from __future__` usage)
-  - Docstring style (Google, NumPy, or minimal)
-  - Type hint conventions
-  - Naming conventions (snake_case, PascalCase)
-  - Logger pattern
-  - Constants pattern
-- **If modifying an existing file**: read the full target file, plus:
-  - Files that import from the target (to understand the public interface that must not break)
-  - Files that the target imports from (to understand available APIs)
-  - Any new files being integrated (to understand their interface)
-  - **The existing test file** for this module (from `test_file` in the task spec, or search for `test_{module_name}.py`). Understand what's currently tested so you can preserve those behaviors.
+- **If creating a new file**:
+  - If `pattern_reference` is provided: use it as the authoritative style guide. Only read 1 sibling file if the pattern reference doesn't cover import style or module-level setup.
+  - If `pattern_reference` is absent: list the target directory and read 1-2 sibling files of the same type to infer conventions (import style, docstring style, type hints, naming, logger pattern, constants).
+- **If modifying an existing file**: read the full target file. Then:
+  - If `existing_api` and `preserve` are provided: use them as the authoritative reference for what exists and what must not change. Skip independent API cataloging and caller reading.
+  - If absent: read files that import from the target, files the target imports from, and the existing test file to understand the interface.
 
 ### 2b. Regression awareness (for modifications only)
 
 When modifying an existing file:
-- **Catalog the public API** before making changes: list all public functions, classes, and their signatures.
+- If `preserve` is provided: treat it as the definitive list of things not to change. After making changes, verify none of the `preserve` entries were violated.
+- If `preserve` is absent: catalog the public API before making changes and verify no removals, renames, or signature changes after.
 - After making changes, verify you have NOT:
   - Removed or renamed any existing public function/class.
   - Changed the signature of an existing public function (added params without defaults, changed return type).
   - Changed the behavior of existing code paths (only add new paths, don't alter existing ones unless the spec explicitly says to).
 - If the task spec includes `high_risk: true`, take extra care:
-  - Read at least 2-3 callers of the file to understand how it's used.
+  - Read at least 2-3 callers of the file to understand how it's used (even if `preserve` is provided).
   - Ensure all new parameters have sensible defaults.
   - Log at debug level for new code paths so failures are visible but not disruptive.
+
+### 2c. Interface contract compliance
+
+If `interface_contract` is provided:
+- **`produces`**: Every function/class listed must be created with the **exact signature specified**. Do not deviate from parameter names, types, or return types.
+- **`consumes`**: Every import listed must work — the producing task has already run or will be in an earlier phase. Use the exact import path and names specified.
+- **`types_shared_with`**: Use the same type definitions as the referenced files. Do not create duplicate type definitions.
 
 ### 3. Implement the task
 
