@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import watcher as watcher_module
+from memory_core import watcher as watcher_module
 
 
 # ---------------------------------------------------------------------------

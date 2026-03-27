@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-import scoring as scoring_module
+from memory_core import scoring as scoring_module
 
 
 def _make_item(*, score: float, category: str, repo: str = "customcheckout", project_id: str = "automatic-discounts", upsert_key: str | None = None):

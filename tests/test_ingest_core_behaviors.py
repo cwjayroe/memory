@@ -5,7 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
-import chunking as chunking_module
+from memory_core import chunking as chunking_module
 import ingest as ingest_module
 
 
@@ -583,7 +583,7 @@ def test_run_note_ingest_empty_text(monkeypatch):
 
 
 def test_run_list_memories_with_results(monkeypatch, caplog):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
 
     items = [
         MemoryItem.from_dict({
@@ -625,7 +625,7 @@ def test_run_list_memories_no_results(monkeypatch, caplog):
 
 
 def test_run_prune_memories_fingerprint(monkeypatch, caplog):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
 
     items = [
         MemoryItem.from_dict({"id": "newer", "memory": "a", "metadata": {"fingerprint": "fp1", "updated_at": "2026-03-01T00:00:00Z"}}),
@@ -651,7 +651,7 @@ def test_run_prune_memories_fingerprint(monkeypatch, caplog):
 
 
 def test_run_prune_memories_path(monkeypatch, caplog):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
 
     items = [
         MemoryItem.from_dict({"id": "stale", "memory": "a", "metadata": {"source_path": "/nonexistent/absolute/path.py"}}),
@@ -756,7 +756,7 @@ def test_run_policy_verbose_dry_run(monkeypatch, capsys):
 
 
 def test_run_export_to_file(monkeypatch, tmp_path, capsys):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
     items = [MemoryItem.from_dict({"id": "m1", "memory": "body1", "metadata": {"category": "decision"}})]
     class _FakeMM:
         def get_all_items(self, _project):
@@ -773,7 +773,7 @@ def test_run_export_to_file(monkeypatch, tmp_path, capsys):
 
 
 def test_run_export_to_stdout(monkeypatch, capsys):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
     items = [MemoryItem.from_dict({"id": "m1", "memory": "stdout body", "metadata": {}})]
     class _FakeMM:
         def get_all_items(self, _project):
@@ -826,7 +826,7 @@ def test_run_import_bad_line_and_empty_content(monkeypatch, tmp_path, capsys):
 
 
 def test_run_watch_delegates(monkeypatch, tmp_path):
-    import watcher as watcher_module
+    from memory_core import watcher as watcher_module
     captured = {}
     def fake_watch_repo(**kwargs):
         captured.update(kwargs)

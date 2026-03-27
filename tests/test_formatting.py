@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-import formatting as fmt_module
-from formatting import ExcerptResult, ResultFormatter
-from memory_types import MemoryItem, MemoryMetadata
+from memory_core import formatting as fmt_module
+from memory_core.formatting import ExcerptResult, ResultFormatter
+from memory_core.memory_types import MemoryItem, MemoryMetadata
 
 
 def _make_search_item(*, memory: str = "test content", project: str = "proj", repo: str = "repo1", category: str = "decision"):

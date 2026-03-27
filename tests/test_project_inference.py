@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import helpers as helpers_module
-import manifest as manifest_module
-import memory_types as contracts_module
-import server_config as server_config_module
+from memory_core import helpers as helpers_module
+from memory_core import manifest as manifest_module
+from memory_core import memory_types as contracts_module
+from memory_core import server_config as server_config_module
 
 
 def _reset_manifest_index_cache() -> None:

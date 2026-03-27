@@ -6,15 +6,15 @@ import json
 import os
 from typing import TYPE_CHECKING, Any
 
-from memory_types import SearchContextRequest, MemoryItem
-from constants import (
+from .memory_types import SearchContextRequest, MemoryItem
+from .constants import (
     DEFAULT_PROJECT_ID,
     MEMORY_ROOT,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
     GET_ALL_LIMIT
 )
-from server_config import ServerConfig
+from .server_config import ServerConfig
 
 if TYPE_CHECKING:
     from mem0 import Memory
@@ -39,10 +39,7 @@ def _normalize_project_ids(value: Any, max_projects: int) -> list[str]:
 def _resolve_org_practice_projects(
     max_projects_per_query: int, manifest_path: str
 ) -> list[str]:
-    try:
-        from .manifest import load_project_index_with_cache, resolve_org_practice_projects
-    except ImportError:  # pragma: no cover - direct script/import fallback
-        from manifest import load_project_index_with_cache, resolve_org_practice_projects  # type: ignore
+    from .manifest import load_project_index_with_cache, resolve_org_practice_projects
 
     index = load_project_index_with_cache(
         manifest_path=manifest_path,
@@ -56,10 +53,7 @@ def _resolve_search_scope(
     request: SearchContextRequest,
     config: ServerConfig,
 ) -> tuple[list[str], str, list[tuple[str, float]]]:
-    try:
-        from .manifest import infer_projects_from_query, load_project_index_with_cache
-    except ImportError:  # pragma: no cover - direct script/import fallback
-        from manifest import infer_projects_from_query, load_project_index_with_cache  # type: ignore
+    from .manifest import infer_projects_from_query, load_project_index_with_cache
 
     if request.project_ids:
         project_ids = _normalize_project_ids(request.project_ids, config.max_projects_per_query)
@@ -265,5 +259,5 @@ def results_from_payload(payload: Any) -> list[MemoryItem]:
     return []
 
 
-def get_all_items(memory: Memory, project_id: str, *, limit: int = GET_ALL_LIMIT) -> list[MemoryItem]:
+def get_all_items(memory: "Memory", project_id: str, *, limit: int = GET_ALL_LIMIT) -> list[MemoryItem]:
     return results_from_payload(memory.get_all(agent_id=project_id, limit=limit))

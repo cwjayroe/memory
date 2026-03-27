@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 import ingest as ingest_module
-import manifest as manifest_module
+from memory_core import manifest as manifest_module
 
 
 def test_manifest_v1_migrates_to_v2():

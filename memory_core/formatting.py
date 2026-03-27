@@ -7,8 +7,8 @@ import json
 import re
 from typing import Any
 
-from memory_types import MemoryItem
-from scoring import get_metadata
+from .memory_types import MemoryItem
+from .scoring import get_metadata
 
 
 @dataclass(frozen=True)

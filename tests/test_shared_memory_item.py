@@ -1,6 +1,6 @@
 from __future__ import annotations
-import helpers as helpers_module
-import memory_types as dataclasses_module
+from memory_core import helpers as helpers_module
+from memory_core import memory_types as dataclasses_module
 
 def test_memory_metadata_and_item_from_dict_preserve_known_and_extra_fields():
     item = dataclasses_module.MemoryItem.from_dict(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from io import BytesIO
 
-import health as health_module
+from memory_core import health as health_module
 
 
 # ---------------------------------------------------------------------------

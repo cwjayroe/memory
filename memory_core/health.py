@@ -25,7 +25,7 @@ def _check_chroma(project_id: str) -> dict[str, Any]:
     try:
         import chromadb
         import os
-        from constants import MEMORY_ROOT  # type: ignore
+        from .constants import MEMORY_ROOT
         path = os.path.join(MEMORY_ROOT, project_id, "chroma")
         client = chromadb.PersistentClient(path=path)
         # Attempt a list collections call to verify read/write access

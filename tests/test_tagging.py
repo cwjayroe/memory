@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import tagging as tagging_module
+from memory_core import tagging as tagging_module
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import utils as utils_module
+from memory_core import utils as utils_module
 
 
 # ---------------------------------------------------------------------------
@@ -183,18 +183,18 @@ def test_normalize_excerpt_chars_within_bounds():
 
 
 def test_normalize_excerpt_chars_below_min():
-    from constants import MIN_EXCERPT_CHARS
+    from memory_core.constants import MIN_EXCERPT_CHARS
     result = utils_module.normalize_excerpt_chars(1)
     assert result == MIN_EXCERPT_CHARS
 
 
 def test_normalize_excerpt_chars_above_max():
-    from constants import MAX_EXCERPT_CHARS
+    from memory_core.constants import MAX_EXCERPT_CHARS
     result = utils_module.normalize_excerpt_chars(999999)
     assert result == MAX_EXCERPT_CHARS
 
 
 def test_normalize_excerpt_chars_non_int():
-    from constants import DEFAULT_EXCERPT_CHARS
+    from memory_core.constants import DEFAULT_EXCERPT_CHARS
     result = utils_module.normalize_excerpt_chars("abc")
     assert isinstance(result, int)

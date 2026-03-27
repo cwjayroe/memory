@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from io import BytesIO
 
-import summarizer as summarizer_module
+from memory_core import summarizer as summarizer_module
 
 
 # ---------------------------------------------------------------------------

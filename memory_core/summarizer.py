@@ -40,7 +40,7 @@ def generate_scope_summary(
     ollama_model: str = "llama3.2",
 ) -> str:
     """Generate a prose summary of a scope's contents using Ollama."""
-    from helpers import _coerce_memory_item  # type: ignore
+    from .helpers import _coerce_memory_item
 
     samples_by_category: dict[str, list[str]] = defaultdict(list)
     for raw_item in items:
