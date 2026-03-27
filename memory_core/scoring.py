@@ -14,20 +14,16 @@ from typing import Any
 
 from rank_bm25 import BM25Okapi
 
-from constants import DEFAULT_PROJECT_ID 
-from memory_types import MemoryItem
-from helpers import normalize_tags, parse_datetime  
+from .constants import DEFAULT_PROJECT_ID
+from .memory_types import MemoryItem
+from .helpers import normalize_tags, parse_datetime
 
 LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class ScoringWeights:
-    """Component weights for the hybrid scoring formula.
-
-    Used in both pre-rerank scoring and final score computation,
-    eliminating the prior duplication of weight constants.
-    """
+    """Component weights for the hybrid scoring formula."""
 
     vector: float = 0.25
     lexical: float = 0.18
@@ -50,7 +46,7 @@ class PackingConfig:
 
 
 # ---------------------------------------------------------------------------
-# Stateless helpers (no instance state, used by ScoringEngine & RerankerManager)
+# Stateless helpers
 # ---------------------------------------------------------------------------
 
 
@@ -326,7 +322,6 @@ class ScoringEngine:
         if metadata.get("category") in self.packing.decision_categories:
             score += 0.15
 
-        # Priority boost/penalty
         priority = metadata.get("priority", "normal")
         if priority == "high":
             score += 0.20

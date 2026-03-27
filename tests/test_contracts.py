@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import memory_types as contracts_module
+from memory_core import memory_types as contracts_module
 
 
 def test_search_context_request_parsing_and_clamps():

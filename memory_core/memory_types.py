@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from utils import safe_int, optional_str, as_bool, normalize_tags, normalize_strings, normalize_project_ids , normalize_response_format, normalize_excerpt_chars # type: ignore
-from constants import DEFAULT_EXCERPT_CHARS 
+from .utils import safe_int, optional_str, as_bool, normalize_tags, normalize_strings, normalize_project_ids , normalize_response_format, normalize_excerpt_chars # type: ignore
+from .constants import DEFAULT_EXCERPT_CHARS 
 
 VALID_PRIORITIES = frozenset({"high", "normal", "low"})
 

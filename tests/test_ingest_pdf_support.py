@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import chunking as chunking_module
+from memory_core import chunking as chunking_module
 import ingest as ingest_module
 import pytest
 

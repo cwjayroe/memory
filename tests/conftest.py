@@ -84,11 +84,17 @@ def _install_fake_dependencies() -> None:
     mcp_types_module.TextContent = _FakeTextContent
     mcp_types_module.Tool = _FakeTool
 
+    # pypdf uses a Rust-backed cryptography lib that panics in some environments;
+    # stub it out so chunking.py (imported transitively by ingest) loads safely.
+    pypdf_module = types.ModuleType("pypdf")
+    pypdf_module.PdfReader = object
+
     sys.modules["mem0"] = mem0_module
     sys.modules["mcp"] = mcp_module
     sys.modules["mcp.server"] = mcp_server_module
     sys.modules["mcp.server.stdio"] = mcp_stdio_module
     sys.modules["mcp.types"] = mcp_types_module
+    sys.modules["pypdf"] = pypdf_module
 
 
 _install_fake_dependencies()

@@ -14,13 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from chunking import (
+from memory_core.chunking import (
     MAX_CHARS,
     OVERLAP_CHARS,
     chunk_file
 )
-from constants import GET_ALL_LIMIT
-from memory_types import (
+from memory_core.constants import GET_ALL_LIMIT
+from memory_core.memory_types import (
     ClearRequest,
     ContextPlanRequest,
     DeleteMemoryRequest,
@@ -34,7 +34,7 @@ from memory_types import (
     RepoIngestRequest,
     StoreMemoryRequest,
 )
-from manifest import (
+from memory_core.manifest import (
     DEFAULT_EXCLUDE,
     DEFAULT_INCLUDE,
     build_context_plan,
@@ -44,7 +44,7 @@ from manifest import (
     validate_project_id,
     write_manifest,
 )
-from helpers import (
+from memory_core.helpers import (
     dedupe_keep_order,
     get_all_items,
     normalize_strings,
@@ -59,7 +59,7 @@ DEFAULT_MANIFEST = Path(__file__).with_name("projects.yaml")
 
 if TYPE_CHECKING:
     from mem0 import Memory
-    from memory_manager import MemoryManager
+    from memory_core.memory_manager import MemoryManager
 
 _MEM_MANAGER: MemoryManager | None = None
 
@@ -67,7 +67,7 @@ _MEM_MANAGER: MemoryManager | None = None
 def _get_mem_manager() -> MemoryManager:
     global _MEM_MANAGER
     if _MEM_MANAGER is None:
-        from memory_manager import MemoryManager
+        from memory_core.memory_manager import MemoryManager
 
         _MEM_MANAGER = MemoryManager(logger=LOGGER)
     return _MEM_MANAGER
@@ -657,7 +657,7 @@ def _run_import(project: str, input_path: str, upsert: bool = True) -> None:
             source_kind = str(md.get("source_kind") or "summary")
             category = str(md.get("category") or source_kind)
             raw_priority = md.get("priority", "normal")
-            from memory_types import VALID_PRIORITIES  # type: ignore
+            from memory_core.memory_types import VALID_PRIORITIES  # type: ignore
             priority = raw_priority if isinstance(raw_priority, str) and raw_priority in VALID_PRIORITIES else "normal"
             req = StoreMemoryRequest(
                 project_id=project,
@@ -682,7 +682,7 @@ def _run_import(project: str, input_path: str, upsert: bool = True) -> None:
 
 def _run_watch(project: str, repo: str, root: str, include: list[str], exclude: list[str], debounce: float) -> None:
     """Watch a directory and auto-ingest changed files."""
-    from watcher import watch_repo  # type: ignore
+    from memory_core.watcher import watch_repo  # type: ignore
     watch_repo(
         root=Path(root).expanduser().resolve(),
         project_id=project,

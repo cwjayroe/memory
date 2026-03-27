@@ -289,7 +289,7 @@ def test_get_stats_success(monkeypatch):
 
 
 def test_health_check_success(monkeypatch):
-    import health as health_mod
+    from memory_core import health as health_mod
 
     monkeypatch.setattr(
         health_mod,
@@ -307,7 +307,7 @@ def test_health_check_success(monkeypatch):
 
 
 def test_move_memory_success(monkeypatch):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
 
     fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
     fake_target = type("FakeMemory", (), {"add": lambda *a, **kw: {"results": [{"id": "new-1", "memory": "body", "metadata": {"category": "decision"}}]}})()
@@ -336,7 +336,7 @@ def test_move_memory_missing_target_project_id(monkeypatch):
 
 
 def test_copy_scope_dry_run(monkeypatch):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
 
     fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
     monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda *a, **kw: [fake_item])
@@ -365,7 +365,7 @@ def test_copy_scope_same_from_to(monkeypatch):
 
 
 def test_export_scope_success(monkeypatch):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
 
     fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
     monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda *a, **kw: [fake_item])
@@ -380,9 +380,9 @@ def test_export_scope_success(monkeypatch):
 
 
 def test_summarize_scope_success(monkeypatch):
-    from memory_types import MemoryItem
+    from memory_core.memory_types import MemoryItem
 
-    import summarizer as summarizer_mod
+    from memory_core import summarizer as summarizer_mod
 
     fake_item = MemoryItem.from_dict({"id": "m1", "memory": "body", "metadata": {"category": "decision"}})
     monkeypatch.setattr(mcp_module.mem_manager, "get_all_items", lambda *a, **kw: [fake_item])

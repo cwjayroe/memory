@@ -15,7 +15,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from memory_types import (
+from memory_core.memory_types import (
     DeleteMemoryRequest,
     FindSimilarRequest,
     GetMemoryRequest,
@@ -25,12 +25,12 @@ from memory_types import (
     StoreMemoryRequest,
     UpdateMemoryRequest,
 )
-from formatting import ResultFormatter
-from scoring import RerankerManager, ScoringEngine
-from constants import DEFAULT_PROJECT_ID, GET_ALL_LIMIT
-from server_config import ServerConfig
-from memory_manager import MemoryManager
-from helpers import (
+from memory_core.formatting import ResultFormatter
+from memory_core.scoring import RerankerManager, ScoringEngine
+from memory_core.constants import DEFAULT_PROJECT_ID, GET_ALL_LIMIT
+from memory_core.server_config import ServerConfig
+from memory_core.memory_manager import MemoryManager
+from memory_core.helpers import (
     _resolve_search_scope,
     _build_search_cache_key,
     _resolve_org_practice_projects,
@@ -40,7 +40,7 @@ from helpers import (
     safe_dict as _safe_dict,
 )
 from ingest import ingest_file, collect_files, build_policy_actions
-from manifest import (
+from memory_core.manifest import (
     build_context_plan,
     resolve_repo_config,
     read_manifest,
@@ -181,7 +181,7 @@ async def _handle_store_memory(arguments: dict[str, Any]) -> list[TextContent]:
 
     # Optional tag suggestion
     if bool(arguments.get("suggest_tags", False)):
-        from tagging import suggest_tags
+        from memory_core.tagging import suggest_tags
         suggestions = suggest_tags(request.content, max_suggestions=5)
         if suggestions:
             text += f"\nsuggested_tags={','.join(suggestions)}"
@@ -602,8 +602,8 @@ async def _handle_get_stats(arguments: dict[str, Any]) -> list[TextContent]:
 
 
 async def _handle_health_check(arguments: dict[str, Any]) -> list[TextContent]:
-    from health import run_health_check
-    from constants import OLLAMA_BASE_URL, OLLAMA_MODEL
+    from memory_core.health import run_health_check
+    from memory_core.constants import OLLAMA_BASE_URL, OLLAMA_MODEL
 
     skip_slow = bool(arguments.get("skip_slow", False))
     result = run_health_check(
@@ -675,12 +675,12 @@ async def _handle_move_memory(arguments: dict[str, Any]) -> list[TextContent]:
 
     metadata = item.metadata.as_dict()
     metadata["project_id"] = target_project
-    from helpers import utc_now
+    from memory_core.helpers import utc_now
     metadata["updated_at"] = utc_now()
 
     target_mem = mem_manager.get_memory(target_project)
     result = target_mem.add(item.memory, agent_id=target_project, metadata=metadata, infer=False)
-    from helpers import results_from_payload
+    from memory_core.helpers import results_from_payload
     stored = results_from_payload(result)
     new_ids = [i.id for i in stored if isinstance(i.id, str)]
 
@@ -709,12 +709,12 @@ async def _handle_copy_scope(arguments: dict[str, Any]) -> list[TextContent]:
             text=f"copy_scope dry-run: would copy {len(all_items)} memories from project={from_id} to project={to_id}",
         )]
 
-    from helpers import utc_now, results_from_payload
+    from memory_core.helpers import utc_now, results_from_payload
     copied = 0
     errors = 0
     target_mem = mem_manager.get_memory(to_id)
     for raw in all_items:
-        from helpers import _coerce_memory_item
+        from memory_core.helpers import _coerce_memory_item
         item = _coerce_memory_item(raw)
         metadata = item.metadata.as_dict()
         metadata["project_id"] = to_id
@@ -738,7 +738,7 @@ async def _handle_export_scope(arguments: dict[str, Any]) -> list[TextContent]:
     all_items = mem_manager.get_all_items(project_id)
     lines: list[str] = []
     for raw in all_items:
-        from helpers import _coerce_memory_item
+        from memory_core.helpers import _coerce_memory_item
         item = _coerce_memory_item(raw)
         lines.append(json.dumps(item.as_dict(), ensure_ascii=False))
 
@@ -752,8 +752,8 @@ async def _handle_export_scope(arguments: dict[str, Any]) -> list[TextContent]:
 
 
 async def _handle_summarize_scope(arguments: dict[str, Any]) -> list[TextContent]:
-    from summarizer import generate_scope_summary
-    from constants import OLLAMA_BASE_URL, OLLAMA_MODEL
+    from memory_core.summarizer import generate_scope_summary
+    from memory_core.constants import OLLAMA_BASE_URL, OLLAMA_MODEL
 
     project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID)
     repo = arguments.get("repo") or None
@@ -886,7 +886,7 @@ async def _handle_get_memory_history(arguments: dict[str, Any]) -> list[TextCont
 
 async def _handle_extract_entities(arguments: dict[str, Any]) -> list[TextContent]:
     from memory_types import ExtractEntitiesRequest
-    from entity_extraction import extract_and_link
+    from memory_core.entity_extraction import extract_and_link
 
     req = ExtractEntitiesRequest.from_arguments(arguments, default_project_id=DEFAULT_PROJECT_ID)
     store = mem_manager._get_metadata_store(req.project_id)
@@ -919,7 +919,7 @@ async def _handle_migrate_to_sqlite(arguments: dict[str, Any]) -> list[TextConte
 
 
 async def _handle_consolidate_memories(arguments: dict[str, Any]) -> list[TextContent]:
-    from consolidation import run_consolidation
+    from memory_core.consolidation import run_consolidation
 
     default_project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID).strip()
     project_id = default_project_id
@@ -946,7 +946,7 @@ async def _handle_consolidate_memories(arguments: dict[str, Any]) -> list[TextCo
 
 
 async def _handle_detect_duplicates(arguments: dict[str, Any]) -> list[TextContent]:
-    from consolidation import ConsolidationEngine
+    from memory_core.consolidation import ConsolidationEngine
 
     default_project_id = str(arguments.get("project_id") or arguments.get("project") or DEFAULT_PROJECT_ID).strip()
     project_id = default_project_id

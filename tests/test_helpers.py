@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import helpers as helpers_module
-import memory_types as dataclasses_module
+from memory_core import helpers as helpers_module
+from memory_core import memory_types as dataclasses_module
 
 
 # ---------------------------------------------------------------------------

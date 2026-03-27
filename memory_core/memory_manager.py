@@ -11,18 +11,18 @@ from datetime import datetime, timezone
 from typing import Any
 
 from mem0 import Memory
-from scoring import (  # type: ignore
+from .scoring import (  # type: ignore
     ScoringEngine,
 )
-from constants import (  # type: ignore
+from .constants import (  # type: ignore
     DEFAULT_PROJECT_ID,
     GET_ALL_LIMIT,
     SQLITE_ENABLED,
 )
-from memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem, MemoryMetadata  # type: ignore
-from sqlite_store import MetadataStore  # type: ignore
-from server_config import ServerConfig  # type: ignore
-from helpers import _is_transient_memory_init_error, _find_ids, _coerce_memory_item, _matches_filters, get_all_items, parse_datetime, utc_now, results_from_payload, build_mem0_config  # type: ignore
+from .memory_types import ListMemoriesRequest, DeleteMemoryRequest, StoreMemoryRequest, SearchContextRequest, UpdateMemoryRequest, FindSimilarRequest, MemoryItem, MemoryMetadata  # type: ignore
+from .sqlite_store import MetadataStore  # type: ignore
+from .server_config import ServerConfig  # type: ignore
+from .helpers import _is_transient_memory_init_error, _find_ids, _coerce_memory_item, _matches_filters, get_all_items, parse_datetime, utc_now, results_from_payload, build_mem0_config  # type: ignore
 
 
 class MemoryManager:
@@ -200,7 +200,7 @@ class MemoryManager:
             for item in stored:
                 if item.id:
                     try:
-                        from entity_extraction import extract_and_link
+                        from .entity_extraction import extract_and_link
                         extract_and_link(
                             request.content,
                             item.id,
@@ -331,7 +331,7 @@ class MemoryManager:
         request: "UpdateMemoryRequest",
     ) -> tuple[bool, str]:
         """Patch an existing memory's body and/or metadata. Returns (found, message)."""
-        from memory_types import VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
+        from .memory_types import VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
 
         item = self.get_memory_item(
             project_id=request.project_id, memory_id=request.memory_id
@@ -385,7 +385,7 @@ class MemoryManager:
         result = memory.add(
             new_body, agent_id=request.project_id, metadata=existing_md, infer=False
         )
-        from helpers import results_from_payload  # type: ignore  # noqa: PLC0415
+        from .helpers import results_from_payload  # type: ignore  # noqa: PLC0415
 
         stored = results_from_payload(result)
         new_ids = [i.id for i in stored if isinstance(i.id, str)]
@@ -546,7 +546,7 @@ class MemoryManager:
         pre_fetched_items: list | None = None,
     ) -> list[dict[str, Any]]:
         """Store multiple memories in one call. Returns per-item results."""
-        from memory_types import StoreMemoryRequest, VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
+        from .memory_types import StoreMemoryRequest, VALID_PRIORITIES  # type: ignore  # noqa: PLC0415
 
         items = (
             pre_fetched_items

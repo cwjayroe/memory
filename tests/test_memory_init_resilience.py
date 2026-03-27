@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 
-import memory_manager as memory_manager_module
+from memory_core import memory_manager as memory_manager_module
 
 
 def _manager():
@@ -87,6 +87,7 @@ def test_search_project_sync_uses_retry_helper(monkeypatch):
 
 def test_store_list_delete_use_retry_helper(monkeypatch):
     manager = _manager()
+    manager._sqlite_enabled = False  # force get_memory path in list_memories
     calls: list[str] = []
 
     class _DummyMemory:

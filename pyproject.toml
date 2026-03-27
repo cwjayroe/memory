@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "memory-core"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "mem0ai",
+    "chromadb",
+    "sentence-transformers",
+    "ollama",
+    "rank-bm25",
+    "numpy",
+    "torch",
+    "pypdf",
+    "pyyaml",
+    "watchdog",
+    "mcp",
+]
+
+[tool.setuptools.packages.find]
+include = ["memory_core*"]
+
+[tool.setuptools.package-data]
+memory_core = ["projects.yaml"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
