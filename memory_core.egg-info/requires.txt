@@ -1,0 +1,11 @@
+mem0ai
+chromadb
+sentence-transformers
+ollama
+rank-bm25
+numpy
+torch
+pypdf
+pyyaml
+watchdog
+mcp
